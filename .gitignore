@@ -1,0 +1,12 @@
+# Ignore all data directories in all projects
+**/DataRaw/**
+**/DataProcessed/**
+
+# But allow the directory itself to exist
+!**/DataRaw/
+!**/DataProcessed/
+
+# Allow .gitkeep so folder structure is preserved
+!**/DataRaw/.gitkeep
+!**/DataProcessed/.gitkeep
+
