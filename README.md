@@ -8,5 +8,5 @@ This repository is for all project work for BIOS6624-Advanced Statistical Method
 | `Background` | contains general background information for the analysis |
 | `Code` | contains all R scripts to perform data processing, exploratory analyses, and models |
 | `DataRaw` | contains all raw data provided by the investigators (analyst only)|
-| `DataProcessed` | contains the processed data used for analysis |
+| `DataProcessed` | contains the processed data used for analysis (analyst only) |
 | `Reports` | contains all analysis reports written in R Markdown (.RMD file location), integrating results, figures, and interpretations |
