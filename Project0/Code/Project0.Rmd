@@ -1,0 +1,120 @@
+---
+title: 'BIOS 6624 : Project 0'
+author: "Ryan Summers"
+date: "2026-01-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(BiocManager)
+library(knitr)
+library(ggplot2)
+library(tidyverse)
+library(magrittr)
+library(ggfortify)
+library(olsrr)
+library(kableExtra)
+library(doBy)
+library(MASS)
+library(dplyr)
+library(table1)
+library(gtsummary)
+library(gt)
+library(stringdist)
+library(ggrepel)
+library(impute)
+library(limma)
+library(qvalue)
+library(gtools)
+library(multtest)
+library(GEOquery)
+library(Biobase)
+library(minfi)
+library(R.utils)
+library(stringr)
+library(qs)
+library(qs2)
+library(lme4)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(data.table)
+```
+
+
+## Read in the csv
+
+```{r}
+spit_df_raw <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project0/DataRaw/Project0_Clean_v2.csv")
+```
+
+```{r}
+# number of subjects
+length(unique(spit_df_raw$SubjectID))
+```
+
+
+```{r}
+# number of missing per 
+spit_raw %>%
+  filter(`Collection Sample` != 1) %>%
+  group_by(`Collection Sample`) %>%
+  summarise(
+    missing_booklet = sum(is.na(`Booklet: Sample interval Decimal Time (mins)`)),
+    missing_MEMs = sum(is.na(`MEMs: Sample interval Decimal Time (mins)`)),
+    n_obs = n())
+
+
+```
+
+
+```{r}
+# clean up the column names
+spit_df <- spit_raw %>%   
+  # lowercase columns & rows
+  setNames(tolower(names(.))) %>%
+  mutate_if(is.character, tolower) %>% 
+  # remove white-space in columns
+  setNames(gsub("\\s+", "_", names(.))) 
+```
+
+```{r}
+# get weekday
+spit_df <- spit_df %>% 
+  mutate(
+    collection_date = as.Date(collection_date, format = "%m/%d/%Y"),
+    weekday = weekdays(collection_date),
+    weekend = factor(if_else(weekday %in% c("Sat","Sun"), 
+                             "Weekend", "Weekday")))
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+str(spit_df)
+```
+
+
+```{r}
+summary(spit_df$`cortisol_(nmol/l)`)
+hist(spit_df$`cortisol_(nmol/l)`)
+
+summary(spit_df$`dhea_(nmol/l)`)
+hist(spit_df$`dhea_(nmol/l)`)
+```
+
+
+```{r}
+
+```
+
+
+
+
+
+
