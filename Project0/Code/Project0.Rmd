@@ -39,6 +39,7 @@ library(patchwork)
 library(lme4)
 library(lmerTest)
 library(data.table)
+library(emmeans)
 ```
 
 
@@ -55,7 +56,7 @@ length(unique(spit_df_raw$SubjectID))
 
 
 ```{r}
-# number of missing per 
+# number of missing measurements per collection sample
 spit_raw %>%
   filter(`Collection Sample` != 1) %>%
   group_by(`Collection Sample`) %>%
@@ -82,17 +83,35 @@ spit_df <- spit_raw %>%
 # get weekday
 spit_df <- spit_df %>% 
   mutate(
+    # get weekday for collection dates
     collection_date = as.Date(collection_date, format = "%m/%d/%Y"),
     weekday = weekdays(collection_date),
-    weekend = factor(if_else(weekday %in% c("Sat","Sun"), 
-                             "Weekend", "Weekday")))
+    # determine if weekday is the weekend
+    weekend = factor(if_else(weekday %in% c("Saturday","Sunday"), 
+                             "Weekend", "Weekday")),
+    # add zeroes for MEMS collection on 1st sample
+    `mems:_sample_interval_decimal_time_(mins)` = 
+      ifelse(collection_sample == 1, 0, 
+             `mems:_sample_interval_decimal_time_(mins)`),
+    # log transform response
+    log_cortisol = log(`cortisol_(nmol/l)`),
+    # depends if 30 is a hard cut off - ask PI
+    t30 = pmin(`mems:_sample_interval_decimal_time_(mins)`, 30),
+    t_after30 = pmax(0, `mems:_sample_interval_decimal_time_(mins)`-30))
 
 ```
+
 
 
 ```{r}
+# sample 2 time distribution
+spit_df %>% 
+  filter(collection_sample == 2) %>% 
+  select(`mems:_sample_interval_decimal_time_(mins)`) %>% 
+  summary()
 
 ```
+
 
 
 ```{r}
@@ -101,6 +120,7 @@ str(spit_df)
 
 
 ```{r}
+# distribution of cortisol and dhea values
 summary(spit_df$`cortisol_(nmol/l)`)
 hist(spit_df$`cortisol_(nmol/l)`)
 
@@ -108,11 +128,73 @@ summary(spit_df$`dhea_(nmol/l)`)
 hist(spit_df$`dhea_(nmol/l)`)
 ```
 
+```{r}
+# log-transformed
+hist(log(spit_df$`cortisol_(nmol/l)`))
+
+hist(log(spit_df$`dhea_(nmol/l)`))
+```
+
+
+
+```{r}
+pw.model <- lmer(log_cortisol ~ t30 + t_after30 +
+                   (1|subjectid),
+                 data=spit_df)
+
+summary(pw.model)
+
+exp(fixef(pw.model))
+```
+
+t30 (slopes only model):
+* During first 30min of waking, cortisol increases 0.614% per minute
+* 1.00614^30 ≈ 1.20 means cortisol increases to about 20% total between waking and 30min
+
+t_after30 (slopes only model):
+* after 30min, cortisol decreases by about 0.21% per minute
+* 0.99792^60 ≈ 0.88 or after 30min, cortisol decreases by about 12% per hour
 
 ```{r}
 
+tr1 <- emtrends(pw.model, specs = ~ 1, var = "t30")
+tr2 <- emtrends(pw.model, specs = ~ 1, var = "t_after30")
+
+# Combine into one object and contrast
+tr_both <- rbind(tr1, tr2)
+contrast(tr_both, method = list("t30 - t_after30" = c(1, -1)))
+
+
 ```
 
+```{r}
+
+
+knot <- 30
+
+newdat <- expand.grid(
+  time_min = seq(0, 720, by = 1)) %>%
+  mutate(
+    t30       = pmin(time_min, knot),
+    t_after30 = pmax(time_min - knot, 0))
+
+newdat$fit <- predict(pw.model, newdata = newdat, re.form = NA)
+
+ggplot(newdat, aes(x = time_min, y = fit)) +
+  geom_line(linewidth = 0.7) +
+  geom_vline(xintercept = knot, linetype = 2) +
+  annotate("text", x = knot, y = max(newdat$fit, na.rm = TRUE),
+           label = paste0(knot, " min"), vjust = -0.3, hjust = -0.1,
+           size = 4, color = "black") +
+  labs(
+    title = "Model-implied mean log(Cortisol) by minutes since waking",
+    subtitle = paste0("Piecewise linear slopes with knot at ", knot, " minutes"),
+    x = "Minutes since waking",
+    y = "Predicted mean log(Cortisol)") +
+  theme_minimal(base_size = 13)
+
+
+```
 
 
 
