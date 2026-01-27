@@ -63,9 +63,11 @@ spit_raw %>%
   #filter(`Collection Sample` != 1) %>%
   group_by(`Collection Sample`) %>%
   summarise(
-    missing_booklet = sum(is.na(`Booket: Clock Time`)),
-    missing_MEMs = sum(is.na(`MEMs: Clock Time`)),
-    n_obs = n())
+    bk_miss = sum(is.na(`Booket: Clock Time`)),
+    mem_miss = sum(is.na(`MEMs: Clock Time`)),
+    n_obs = n(),
+    `bk_%` = bk_miss/n_obs,
+    `mem_%` = mem_miss/n_obs)
 
 
 ```
@@ -310,12 +312,17 @@ tbl1 <- spit_df2 %>%
   
   tbl_summary(
     by = collection_sample,
+    type = all_continuous() ~ "continuous2",
     statistic = list(
-      all_continuous() ~ "{mean} ({sd})",
+      all_continuous() ~ c(
+      "{median} ({p25}, {p75})",
+      "{min} - {max}"),
       all_categorical() ~ "{p}%"),
     
     digits = all_continuous() ~ 1,
     missing = "ifany",
+    missing_text = "NA",
+    missing_stat = "{p_miss}%",
     
     # change variable names
     label = list(
@@ -327,12 +334,25 @@ tbl1 <- spit_df2 %>%
     adeq_mem ~ "MEMS adherence (±15 min)"
     )) %>%
   add_overall() %>%
-  modify_table_body(
-     ~ .x %>%
+  # modify_table_body(
+  #    ~ .x %>%
+  #     mutate(
+  #       across(
+  #         starts_with("stat_"),
+  #         ~ if_else(is.na(.) | str_detect(., "^NA"), "—", .)))) %>% 
+  
+    modify_table_body(
+    ~ .x %>%
       mutate(
         across(
           starts_with("stat_"),
-          ~ if_else(is.na(.) | str_detect(., "^NA"), "—", .)))) %>% 
+          ~ if_else(
+            # only replace NA-looking output for categorical rows / missing rows,
+            # and NOT for continuous variables (continuous2 multi-line rows)
+            var_type != "continuous" &
+              row_type %in% c("level", "missing") &
+              (is.na(.) | str_detect(., "^NA")), "—", .)))) %>% 
+  
     modify_table_body(
     ~ .x %>%
       mutate(
@@ -344,15 +364,54 @@ tbl1 <- spit_df2 %>%
                          "—", stat_1),
         stat_3 = if_else(row_type == "missing" & variable %in% adherence_vars, 
                          "—", stat_3))) %>% 
-  bold_labels()
+  
+    modify_table_body(
+    ~ .x %>%
+      mutate(
+        across(
+          starts_with("stat_"),
+          ~ if_else(
+            # Only touch adherence variables, any row type,
+            # and replace anything that is NA / starts with NA (e.g., NA%, NA (NA%))
+            variable %in% adherence_vars & (is.na(.) | str_detect(., "^NA")),
+            "—", .)))) %>% 
+  bold_labels() %>% 
+  italicize_levels() %>% 
+  add_p(pvalue_fun = label_style_pvalue(digits = 2)) %>% 
+  modify_spanning_header(
+    c("stat_1", "stat_2", "stat_3", "stat_4") ~ "**Collection Sample**") 
 
 tbl1
 
 
 ```
 
+Confirm the rates of adherence are accurate in tbl_summary
 ```{r}
-str(tbl1)
+# booklet = good adherence
+spit_df2 %>%
+  ungroup() %>% 
+  filter(collection_sample %in% c(2, 4)) %>%
+  group_by(collection_sample) %>% 
+  summarise(
+    n_total_rows = n(),
+    n_nonmissing = sum(!is.na(good_bk)),
+    n_good  = sum(good_bk == T, na.rm = T),
+    pct_good = 100 * n_good / n_nonmissing) %>% 
+  ungroup()
+
+
+# mem = good adherence
+spit_df2 %>%
+  ungroup() %>% 
+  filter(collection_sample %in% c(2, 4)) %>%
+  group_by(collection_sample) %>% 
+  summarise(
+    n_total_rows = n(),
+    n_nonmissing = sum(!is.na(good_mem)),
+    n_good  = sum(good_mem == T, na.rm = T),
+    pct_good = 100 * n_good / n_nonmissing) %>% 
+  ungroup()
 ```
 
 
