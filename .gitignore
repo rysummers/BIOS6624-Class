@@ -10,3 +10,6 @@
 !**/DataRaw/.gitkeep
 !**/DataProcessed/.gitkeep
 
+# Ignore mac file
+.DS_Store
+

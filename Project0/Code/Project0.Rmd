@@ -40,34 +40,37 @@ library(lme4)
 library(lmerTest)
 library(data.table)
 library(emmeans)
+library(lubridate)
+library(naniar)
 ```
 
 
 ## Read in the csv
 
 ```{r}
-spit_df_raw <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project0/DataRaw/Project0_Clean_v2.csv")
+spit_raw <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project0/DataRaw/Project0_Clean_v2.csv")
 ```
 
 ```{r}
 # number of subjects
-length(unique(spit_df_raw$SubjectID))
+length(unique(spit_raw$SubjectID))
 ```
 
 
 ```{r}
 # number of missing measurements per collection sample
 spit_raw %>%
-  filter(`Collection Sample` != 1) %>%
+  #filter(`Collection Sample` != 1) %>%
   group_by(`Collection Sample`) %>%
   summarise(
-    missing_booklet = sum(is.na(`Booklet: Sample interval Decimal Time (mins)`)),
-    missing_MEMs = sum(is.na(`MEMs: Sample interval Decimal Time (mins)`)),
+    missing_booklet = sum(is.na(`Booket: Clock Time`)),
+    missing_MEMs = sum(is.na(`MEMs: Clock Time`)),
     n_obs = n())
 
 
 ```
 
+## Data Management & Cleanup
 
 ```{r}
 # clean up the column names
@@ -80,7 +83,6 @@ spit_df <- spit_raw %>%
 ```
 
 ```{r}
-# get weekday
 spit_df <- spit_df %>% 
   mutate(
     # get weekday for collection dates
@@ -97,25 +99,18 @@ spit_df <- spit_df %>%
     log_cortisol = log(`cortisol_(nmol/l)`),
     # depends if 30 is a hard cut off - ask PI
     t30 = pmin(`mems:_sample_interval_decimal_time_(mins)`, 30),
-    t_after30 = pmax(0, `mems:_sample_interval_decimal_time_(mins)`-30))
+    t_after30 = pmax(0, `mems:_sample_interval_decimal_time_(mins)`-30),
+    # calculate time diffferences between book and MEM
+    time_diff_min = as.numeric(difftime(`booket:_clock_time`, 
+                                         `mems:_clock_time`, units = "mins")),
+    interval_diff_min = `booklet:_sample_interval_decimal_time_(mins)` - 
+      `mems:_sample_interval_decimal_time_(mins)`)
 
 ```
 
-
-
 ```{r}
-# sample 2 time distribution
-spit_df %>% 
-  filter(collection_sample == 2) %>% 
-  select(`mems:_sample_interval_decimal_time_(mins)`) %>% 
-  summary()
-
-```
-
-
-
-```{r}
-str(spit_df)
+summary(spit_df$time_diff_min)
+hist(spit_df$time_diff_min)
 ```
 
 
@@ -127,6 +122,7 @@ hist(spit_df$`cortisol_(nmol/l)`)
 summary(spit_df$`dhea_(nmol/l)`)
 hist(spit_df$`dhea_(nmol/l)`)
 ```
+
 
 ```{r}
 # log-transformed
@@ -168,8 +164,6 @@ contrast(tr_both, method = list("t30 - t_after30" = c(1, -1)))
 ```
 
 ```{r}
-
-
 knot <- 30
 
 newdat <- expand.grid(
@@ -196,6 +190,205 @@ ggplot(newdat, aes(x = time_min, y = fit)) +
 
 ```
 
+
+Create a datetime variable that merges the collection date and booklet clock time.
+* Use this variable as an anchor to determine minutest since wake-up
+* Additionally, create a column that stores either booklet or MEM clock time based on whether booklet contains a missing value.
+```{r}
+spit_df <- spit_df %>%
+  mutate(
+    # create a variable that includes the date and clock time for booklet and MEMs
+    bk_dt = as.POSIXct(paste(collection_date, `booket:_clock_time`),
+                            format = "%Y-%m-%d %H:%M", tz = "UTC"),
+    mems_dt    = as.POSIXct(paste(collection_date, `mems:_clock_time`),
+                            format = "%Y-%m-%d %H:%M", tz = "UTC")) %>% 
+
+group_by(subjectid, collection_date) %>%
+  
+  mutate(
+    # use wake time determined by sleep diary as PI noted
+    diary_wake_time = as.POSIXct(
+      paste(collection_date, sleep_diary_reported_wake_time),
+      format = "%Y-%m-%d %H:%M", tz = "UTC"),
+    # fill down datetime values for each subject on each day
+    diary_wake_time = fill(data.frame(diary_wake_time), 
+                    diary_wake_time, 
+                    .direction = "down")$diary_wake_time,
+
+    # extract collection times from booklet, if NA grab MEMs
+    sample_dt = coalesce(`booket:_clock_time`, `mems:_clock_time`),
+    dt_source = if_else(!is.na(`booket:_clock_time`), "Booklet", "MEMS"),
+    
+    # calculate time since waking for both booklet and MEMs from diary start
+    bk_min_since_wk = as.numeric(difftime(bk_dt, diary_wake_time, 
+                                          units = "mins")),
+    mem_min_since_wk = as.numeric(difftime(mems_dt, diary_wake_time, 
+                                           units = "mins"))) %>% 
+  ungroup()
+
+```
+
+
+
+Indicate whether Samples 2 and 4 are within 7.5min and 15min acceptance windows for adherence
+```{r}
+targets <- c(`2` = 30, `4` = 600)
+
+spit_df2 <- spit_df %>%
+  #filter(collection_sample %in% c(2, 4)) %>%
+  mutate(
+    target_min = targets[as.character(collection_sample)],
+    good_bk    = abs(bk_min_since_wk - target_min) <= 7.5,
+    adeq_bkt = abs(bk_min_since_wk - target_min) <= 15,
+    good_mem    = abs(mem_min_since_wk - target_min) <= 7.5,
+    adeq_mem = abs(mem_min_since_wk - target_min) <= 15)
+
+spit_df2 <- spit_df %>%
+  mutate(
+    target_min = case_when(
+      collection_sample == 2 ~ 30,
+      collection_sample == 4 ~ 600,
+      TRUE ~ NA_real_),
+    # booklet times
+    good_bk = if_else(
+      !is.na(target_min),
+      abs(bk_min_since_wk - target_min) <= 7.5,
+      NA),
+    adeq_bkt = if_else(
+      !is.na(target_min),
+      abs(bk_min_since_wk - target_min) <= 15,
+      NA),
+    # MEM times
+    good_mem = if_else(
+      !is.na(target_min),
+      abs(mem_min_since_wk - target_min) <= 7.5,
+      NA),
+    adeq_mem = if_else(
+      !is.na(target_min),
+      abs(mem_min_since_wk - target_min) <= 15,
+      NA))
+
+
+
+```
+
+
+## Missing Data Analysis
+
+```{r}
+# number of NAs
+lapply(spit_df, function(x) sum(is.na(x)))
+```
+
+```{r}
+spit_df %>% 
+  #group_by(collection_sample) %>% 
+  select(`booket:_clock_time`, `mems:_clock_time`, `cortisol_(ug/dl)`, `dhea_(pg/dl)`,
+         `cortisol_(nmol/l)`, `dhea_(nmol/l)`, daynumb) %>% 
+  miss_var_summary()
+
+
+```
+
+
+## Descriptive Summary (Table 1)
+
+```{r}
+# variables used to remove NA calculation for samples 1 and 3
+adherence_vars <- c("good_bk", "adeq_bkt", "good_mem", "adeq_mem")
+
+tbl1 <- spit_df2 %>%
+  ungroup() %>% 
+  select(
+    collection_sample,
+    `dhea_(nmol/l)`,
+    `cortisol_(nmol/l)`,
+    good_bk,
+    adeq_bkt,
+    good_mem,
+    adeq_mem ) %>%
+  
+  tbl_summary(
+    by = collection_sample,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{p}%"),
+    
+    digits = all_continuous() ~ 1,
+    missing = "ifany",
+    
+    # change variable names
+    label = list(
+    `dhea_(nmol/l)` ~ "DHEA (nmol/L)"  ,
+    `cortisol_(nmol/l)` ~ "Cortisol (nmol/L)",
+    good_bk  ~ "Booklet adherence (±7.5 min)",
+    adeq_bkt  ~ "Booklet adherence (±15 min)",
+    good_mem ~ "MEMS adherence (±7.5 min)",
+    adeq_mem ~ "MEMS adherence (±15 min)"
+    )) %>%
+  add_overall() %>%
+  modify_table_body(
+     ~ .x %>%
+      mutate(
+        across(
+          starts_with("stat_"),
+          ~ if_else(is.na(.) | str_detect(., "^NA"), "—", .)))) %>% 
+    modify_table_body(
+    ~ .x %>%
+      mutate(
+        # remove Overall NA calculation for adherence variables (misleading to have)
+        stat_0 = if_else(row_type == "missing" & variable %in% adherence_vars, 
+                         "—", stat_0),
+        # remove NA calculation for collection 1 and 3
+        stat_1 = if_else(row_type == "missing" & variable %in% adherence_vars, 
+                         "—", stat_1),
+        stat_3 = if_else(row_type == "missing" & variable %in% adherence_vars, 
+                         "—", stat_3))) %>% 
+  bold_labels()
+
+tbl1
+
+
+```
+
+```{r}
+str(tbl1)
+```
+
+
+Scatter-plot of agreement (stratify by collection sample)
+```{r}
+ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, color="firebrick3") +
+  facet_wrap(~ collection_sample) +
+  labs(
+    title = "Booklet vs MEMS Clock Time by Collection Sample",
+    x = "MEMS time (minutes)",
+    y = "Booklet time (minutes)"
+  ) +
+  theme_minimal(base_size = 10)
+
+
+
+```
+
+Mixed Model: Is there bias in self-reported times, and does it differ by sample, accounting for repeated measurements within subjects?
+```{r}
+agrmnt.model <- lmer(
+  time_diff_min ~ factor(collection_sample) + (1 | subjectid),
+  data = spit_df)
+
+summary(agrmnt.model)
+```
+
+Interpretation:
+In lme model of time differences (Booklet − MEMS), agreement at waking did not show significant bias ($ \beta_0:t=-1.1; p=0.29$); however, the +30-minute sample showed that participants recorded times approximately 16.3 minutes earlier (-4.1-12.2) than the MEMS timestamp, on average. There is no evidence of disagreement for samples before lunch ($p=0.7$) and 600min after waking ($p=0.8$).
+
+*	Between-subject differences in reporting bias are modest (~7 min)
+* Within-subject variability is much larger (~31 min)
+
+Most disagreement arises from occasion-to-occasion variability, not consistent subject-specific bias.
 
 
 
