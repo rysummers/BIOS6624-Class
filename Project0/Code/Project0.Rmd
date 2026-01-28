@@ -99,10 +99,7 @@ spit_df <- spit_df %>%
              `mems:_sample_interval_decimal_time_(mins)`),
     # log transform response
     log_cortisol = log(`cortisol_(nmol/l)`),
-    # depends if 30 is a hard cut off - ask PI
-    t30 = pmin(`mems:_sample_interval_decimal_time_(mins)`, 30),
-    t_after30 = pmax(0, `mems:_sample_interval_decimal_time_(mins)`-30),
-    # calculate time diffferences between book and MEM
+    # calculate time differences between book and MEM
     time_diff_min = as.numeric(difftime(`booket:_clock_time`, 
                                          `mems:_clock_time`, units = "mins")),
     interval_diff_min = `booklet:_sample_interval_decimal_time_(mins)` - 
@@ -131,65 +128,6 @@ hist(spit_df$`dhea_(nmol/l)`)
 hist(log(spit_df$`cortisol_(nmol/l)`))
 
 hist(log(spit_df$`dhea_(nmol/l)`))
-```
-
-
-
-```{r}
-pw.model <- lmer(log_cortisol ~ t30 + t_after30 +
-                   (1|subjectid),
-                 data=spit_df)
-
-summary(pw.model)
-
-exp(fixef(pw.model))
-```
-
-t30 (slopes only model):
-* During first 30min of waking, cortisol increases 0.614% per minute
-* 1.00614^30 ≈ 1.20 means cortisol increases to about 20% total between waking and 30min
-
-t_after30 (slopes only model):
-* after 30min, cortisol decreases by about 0.21% per minute
-* 0.99792^60 ≈ 0.88 or after 30min, cortisol decreases by about 12% per hour
-
-```{r}
-
-tr1 <- emtrends(pw.model, specs = ~ 1, var = "t30")
-tr2 <- emtrends(pw.model, specs = ~ 1, var = "t_after30")
-
-# Combine into one object and contrast
-tr_both <- rbind(tr1, tr2)
-contrast(tr_both, method = list("t30 - t_after30" = c(1, -1)))
-
-
-```
-
-```{r}
-knot <- 30
-
-newdat <- expand.grid(
-  time_min = seq(0, 720, by = 1)) %>%
-  mutate(
-    t30       = pmin(time_min, knot),
-    t_after30 = pmax(time_min - knot, 0))
-
-newdat$fit <- predict(pw.model, newdata = newdat, re.form = NA)
-
-ggplot(newdat, aes(x = time_min, y = fit)) +
-  geom_line(linewidth = 0.7) +
-  geom_vline(xintercept = knot, linetype = 2) +
-  annotate("text", x = knot, y = max(newdat$fit, na.rm = TRUE),
-           label = paste0(knot, " min"), vjust = -0.3, hjust = -0.1,
-           size = 4, color = "black") +
-  labs(
-    title = "Model-implied mean log(Cortisol) by minutes since waking",
-    subtitle = paste0("Piecewise linear slopes with knot at ", knot, " minutes"),
-    x = "Minutes since waking",
-    y = "Predicted mean log(Cortisol)") +
-  theme_minimal(base_size = 13)
-
-
 ```
 
 
@@ -225,7 +163,12 @@ group_by(subjectid, collection_date) %>%
     bk_min_since_wk = as.numeric(difftime(bk_dt, diary_wake_time, 
                                           units = "mins")),
     mem_min_since_wk = as.numeric(difftime(mems_dt, diary_wake_time, 
-                                           units = "mins"))) %>% 
+                                           units = "mins")),
+    # create knot for piecewise regression - PI wants to kknow if theres
+    # an increase in cortisol and/or DHEA from waking to 30min. Also, rate of
+    # decline after 30min of waking.
+    t30 = pmin(`mems:_sample_interval_decimal_time_(mins)`, 30),
+    t_after30 = pmax(0, `mems:_sample_interval_decimal_time_(mins)`-30),) %>% 
   ungroup()
 
 ```
@@ -283,23 +226,111 @@ lapply(spit_df, function(x) sum(is.na(x)))
 ```
 
 ```{r}
-spit_df %>% 
+spit_df %>%
+  ungroup() %>% 
   #group_by(collection_sample) %>% 
   select(`booket:_clock_time`, `mems:_clock_time`, `cortisol_(ug/dl)`, `dhea_(pg/dl)`,
-         `cortisol_(nmol/l)`, `dhea_(nmol/l)`, daynumb) %>% 
+         `cortisol_(nmol/l)`, `dhea_(nmol/l)`) %>% 
   miss_var_summary()
 
 
 ```
 
+# Address PI's question about agreement between the subject’s recordings of sampling times compared to the times recorded by an electronic monitoring cap (1)
 
-## Descriptive Summary (Table 1)
+Scatter-plot of agreement (stratify by collection sample) for PI
+```{r}
+
+cor_by_sample <- spit_df %>%
+  filter(!is.na(mem_min_since_wk), !is.na(bk_min_since_wk)) %>%
+  group_by(collection_sample) %>%
+  summarise(
+    r = cor(mem_min_since_wk, bk_min_since_wk),
+    p = cor.test(mem_min_since_wk, bk_min_since_wk)$p.value)
+
+cor_by_sample
+
+```
+
+```{r}
+library(ggpubr)
+
+ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, color = "firebrick3") +
+  facet_wrap(~ collection_sample) +
+  stat_cor(
+    method = "pearson",
+    label.x.npc = "left",
+    label.y.npc = "top",
+    size = 3
+  ) +
+  labs(
+    title = "Booklet vs MEMS Collection Time by Sample",
+    x = "MEMS minutes since wake",
+    y = "Booklet minutes since wake"
+  ) +
+  theme_minimal(base_size = 10)
+
+```
+
+
+
+```{r}
+ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, color="firebrick3") +
+  facet_wrap(~ collection_sample) +
+  labs(
+    title = "Booklet vs MEMS Clock Time by Collection Sample",
+    x = "MEMS time (minutes)",
+    y = "Booklet time (minutes)"
+  ) +
+  theme_minimal(base_size = 10)
+
+
+
+```
+
+Mixed Model: Is there bias in self-reported times, and does it differ by sample, accounting for repeated measurements within subjects?
+```{r}
+agrmnt.model <- lmer(
+  time_diff_min ~ factor(collection_sample) + (1 | subjectid),
+  data = spit_df)
+
+summary(agrmnt.model)
+```
+
+Interpretation:
+In lme model of time differences (Booklet − MEMS), agreement at waking did not show significant bias ($ \beta_0:t=-1.1; p=0.29$); however, the +30-minute sample showed that participants recorded times approximately 16.3 minutes earlier (-4.1-12.2) than the MEMS timestamp, on average. There is no evidence of disagreement for samples before lunch ($p=0.7$) and 600min after waking ($p=0.8$).
+
+*	Between-subject differences in reporting bias are modest (~7 min)
+* Within-subject variability is much larger (~31 min)
+
+Most disagreement arises from occasion-to-occasion variability, not consistent subject-specific bias.
+
+Correlation is invariant to shifts:
+* If Booklet times are always 10 minutes later than MEMS, correlation can still be ~1.0.
+* High correlation does not preclude bias; the mixed model identifies a consistent offset at Sample 2 after accounting for subject-level variability.
+
+
+## Address PI's question about adhering to +30min and 600min sampling times (2)
+and create a table 1 (Descriptive Table)
 
 ```{r}
 # variables used to remove NA calculation for samples 1 and 3
 adherence_vars <- c("good_bk", "adeq_bkt", "good_mem", "adeq_mem")
 
 tbl1 <- spit_df2 %>%
+  mutate(
+    collection_sample = factor(
+      collection_sample,
+      levels = c(1, 2, 3, 4),
+      labels = c(
+        "Wake",
+        "+30 min",
+        "Before lunch",
+        "+600 min"))) %>% 
   ungroup() %>% 
   select(
     collection_sample,
@@ -315,8 +346,9 @@ tbl1 <- spit_df2 %>%
     type = all_continuous() ~ "continuous2",
     statistic = list(
       all_continuous() ~ c(
-      "{median} ({p25}, {p75})",
-      "{min} - {max}"),
+        "{mean} ({sd})",
+        "{median} ({p25}, {p75})",
+        "{min} - {max}"),
       all_categorical() ~ "{p}%"),
     
     digits = all_continuous() ~ 1,
@@ -379,12 +411,27 @@ tbl1 <- spit_df2 %>%
   italicize_levels() %>% 
   add_p(pvalue_fun = label_style_pvalue(digits = 2)) %>% 
   modify_spanning_header(
-    c("stat_1", "stat_2", "stat_3", "stat_4") ~ "**Collection Sample**") 
+    c("stat_1", "stat_2", "stat_3", "stat_4") ~ "**Collection Sample**") %>% 
+  as_gt() %>%
+  tab_options(
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
 
 tbl1
 
 
 ```
+
+```{r}
+# instances where there is no booklet or mem time recorded but cortisol/dhea
+# levels are recorded
+spit_df2 %>% 
+  filter(is.na(`booket:_clock_time`) & is.na(`mems:_clock_time`))
+```
+
 
 Confirm the rates of adherence are accurate in tbl_summary
 ```{r}
@@ -414,40 +461,103 @@ spit_df2 %>%
   ungroup()
 ```
 
-
-Scatter-plot of agreement (stratify by collection sample)
+Confirm proportions test is accurate in tbl_summary
 ```{r}
-ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, linetype = 2, color="firebrick3") +
-  facet_wrap(~ collection_sample) +
+# booklet good test
+tab <- spit_df2 %>%
+  filter(collection_sample %in% c(2, 4)) %>%
+  filter(!is.na(good_bk)) %>%
+  with(table(collection_sample, good_bk))
+
+tab
+chisq.test(tab)
+fisher.test(tab)
+
+```
+
+
+## Address PI's question about changes of cortisol and DHEA over time (3) 
+
+Identify subjects with cortisol levels over 80 nmol/L and DHEA upper limit of 
+5.205 nmol/L. These subjects could have underlying health problems
+and should be excluded from analysis
+
+```{r}
+spit_df_filt <- spit_df %>% 
+  filter(`cortisol_(nmol/l)` <= 80 & `dhea_(nmol/l)`!=5.205) %>%
+  mutate(
+    # split time from wake to 30min and after 30min after waking (PI interest)
+    # use booklet time as PI requested
+    t30 = pmin(bk_min_since_wk, 30),
+    t_after30 = pmax(0, `mems:_sample_interval_decimal_time_(mins)`-30))
+```
+
+
+
+```{r}
+pw.model <- lmer(log_cortisol ~ t30 + t_after30 + 
+                   (1|subjectid),
+                 data=spit_df_filt)
+
+summary(pw.model)
+
+exp(fixef(pw.model))
+```
+
+t30:
+* During first 30min of waking, cortisol increases 0.71% per minute
+* 1.0070562^30 ≈ 1.2348 means cortisol increases to about 23.5% total between waking and 30min
+
+t_after30:
+* after 30min, cortisol decreases by about 0.21% per minute
+* 0.9978616^60 ≈ 0.8795 or after 30min, cortisol decreases by about 12.1% per hour
+
+```{r}
+
+tr1 <- emtrends(pw.model, specs = ~ 1, var = "t30")
+tr2 <- emtrends(pw.model, specs = ~ 1, var = "t_after30")
+
+# Combine into one object and contrast
+tr_both <- rbind(tr1, tr2)
+contrast(tr_both, method = list("t30 - t_after30" = c(1, -1)))
+
+
+```
+
+```{r}
+knot <- 30
+
+newdat <- expand.grid(
+  time_min = seq(0, max(spit_df_filt$bk_min_since_wk, na.rm = T), by = 1)) %>%
+  mutate(
+    t30       = pmin(time_min, knot),
+    t_after30 = pmax(time_min - knot, 0))
+
+newdat$fit <- predict(pw.model, newdata = newdat, re.form = NA)
+
+# convert back to original units
+newdat$exp_fit <- exp(newdat$fit)
+
+
+ggplot(newdat, aes(x = time_min, y = fit)) +
+  geom_line(linewidth = 0.7) +
+  geom_vline(xintercept = knot, linetype = 2, color="firebrick3") +
+  annotate("text", x = knot, y = max(newdat$fit, na.rm = TRUE),
+           label = paste0(knot, " min"), vjust = 3.5, hjust = -0.1,
+           size = 4, color = "black") +
   labs(
-    title = "Booklet vs MEMS Clock Time by Collection Sample",
-    x = "MEMS time (minutes)",
-    y = "Booklet time (minutes)"
-  ) +
-  theme_minimal(base_size = 10)
-
+    title = "Mean log(Cortisol) by minutes since waking",
+    subtitle = paste0("Piecewise linear slopes with knot at ", knot, " minutes"),
+    x = "Minutes since waking",
+    y = "Predicted mean log(Cortisol)") +
+  theme_minimal(base_size = 13)
 
 
 ```
 
-Mixed Model: Is there bias in self-reported times, and does it differ by sample, accounting for repeated measurements within subjects?
-```{r}
-agrmnt.model <- lmer(
-  time_diff_min ~ factor(collection_sample) + (1 | subjectid),
-  data = spit_df)
 
-summary(agrmnt.model)
-```
 
-Interpretation:
-In lme model of time differences (Booklet − MEMS), agreement at waking did not show significant bias ($ \beta_0:t=-1.1; p=0.29$); however, the +30-minute sample showed that participants recorded times approximately 16.3 minutes earlier (-4.1-12.2) than the MEMS timestamp, on average. There is no evidence of disagreement for samples before lunch ($p=0.7$) and 600min after waking ($p=0.8$).
 
-*	Between-subject differences in reporting bias are modest (~7 min)
-* Within-subject variability is much larger (~31 min)
-
-Most disagreement arises from occasion-to-occasion variability, not consistent subject-specific bias.
 
 
 
