@@ -2,7 +2,11 @@
 title: 'BIOS 6624 : Project 0'
 author: "Ryan Summers"
 date: "2026-01-22"
-output: html_document
+output:
+  html_document: default
+  pdf_document: 
+    latex_engine: xelatex
+  word_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -99,6 +103,7 @@ spit_df <- spit_df %>%
              `mems:_sample_interval_decimal_time_(mins)`),
     # log transform response
     log_cortisol = log(`cortisol_(nmol/l)`),
+    log_dhea = log(`dhea_(nmol/l)`),
     # calculate time differences between book and MEM
     time_diff_min = as.numeric(difftime(`booket:_clock_time`, 
                                          `mems:_clock_time`, units = "mins")),
@@ -113,27 +118,10 @@ hist(spit_df$time_diff_min)
 ```
 
 
-```{r}
-# distribution of cortisol and dhea values
-summary(spit_df$`cortisol_(nmol/l)`)
-hist(spit_df$`cortisol_(nmol/l)`)
-
-summary(spit_df$`dhea_(nmol/l)`)
-hist(spit_df$`dhea_(nmol/l)`)
-```
-
-
-```{r}
-# log-transformed
-hist(log(spit_df$`cortisol_(nmol/l)`))
-
-hist(log(spit_df$`dhea_(nmol/l)`))
-```
-
-
 Create a datetime variable that merges the collection date and booklet clock time.
 * Use this variable as an anchor to determine minutest since wake-up
 * Additionally, create a column that stores either booklet or MEM clock time based on whether booklet contains a missing value.
+
 ```{r}
 spit_df <- spit_df %>%
   mutate(
@@ -266,43 +254,109 @@ ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
     size = 3
   ) +
   labs(
-    title = "Booklet vs MEMS Collection Time by Sample",
-    x = "MEMS minutes since wake",
+    title = "Booklet vs Cap Collection Time by Sample",
+    x = "Cap minutes since wake",
     y = "Booklet minutes since wake"
   ) +
   theme_minimal(base_size = 10)
 
 ```
 
-
-
-```{r}
-ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, linetype = 2, color="firebrick3") +
-  facet_wrap(~ collection_sample) +
-  labs(
-    title = "Booklet vs MEMS Clock Time by Collection Sample",
-    x = "MEMS time (minutes)",
-    y = "Booklet time (minutes)"
-  ) +
-  theme_minimal(base_size = 10)
-
-
-
-```
-
 Mixed Model: Is there bias in self-reported times, and does it differ by sample, accounting for repeated measurements within subjects?
 ```{r}
+# convert collection sample to factor and create labels for it
+spit_df$collection_sample <- factor(
+  spit_df$collection_sample,
+  labels = c(
+    "Wake",
+    "+30min",
+    "Before lunch",
+    "+600min"))
+
+hist(spit_df$time_diff_min)
+summary(spit_df$time_diff_min)
+
+# booklet minus mem as outcome
 agrmnt.model <- lmer(
-  time_diff_min ~ factor(collection_sample) + (1 | subjectid),
+  time_diff_min ~ 0 + collection_sample + (1 | subjectid),
   data = spit_df)
 
 summary(agrmnt.model)
+
 ```
 
+```{r}
+# check residuals to determine if right skewness is extreme enough for this model
+plot(agrmnt.model)   # residuals vs fitted
+qqnorm(resid(agrmnt.model)); qqline(resid(agrmnt.model))
+
+
+confint(agrmnt.model, method = "boot")
+library(clubSandwich)
+coef_test(agrmnt.model, vcov = "CR2")
+
+
+```
+
+
+```{r}
+
+tbl_regression(
+  agrmnt.model,
+  intercept = T,
+  estimate_fun = label_style_sigfig(digits = 3),
+  pvalue_fun = label_style_pvalue(digits = 3),
+    label = list(
+    collection_sample ~ "Collection Sample")) %>% 
+  as_gt() %>%
+  gt::tab_header(title = "Agreement Between Booklet vs Cap",
+                 subtitle = "LMM w/ Random Intercept") %>% 
+    tab_options(
+      table.width = pct(55),
+    table.font.size = "small",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+  
+
+```
+
+```{r}
+# class recommened one - **debatable**
+agrmnt.model2 <- lmer(
+  bk_min_since_wk ~  mem_min_since_wk + (1 | subjectid),
+  data = spit_df)
+
+summary(agrmnt.model2)
+
+```
+
+```{r}
+tbl_regression(
+  agrmnt.model2,
+  intercept = T,
+  estimate_fun = label_style_sigfig(digits = 3),
+  pvalue_fun = label_style_pvalue(digits = 3),
+    label = list(
+      `(Intercept)` ~ "Intercept",
+    mem_min_since_wk ~ "Cap min since waking")) %>% 
+  as_gt() %>%
+  gt::tab_header(title = "Agreement Between Booklet vs Cap",
+                 subtitle = "LMM w/ Random Intercept") %>% 
+    tab_options(
+      table.width = pct(55),
+    table.font.size = "small",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+  
+```
+
+
+Intercept should be zero and slope should be 1. 
+
 Interpretation:
-In lme model of time differences (Booklet − MEMS), agreement at waking did not show significant bias ($ \beta_0:t=-1.1; p=0.29$); however, the +30-minute sample showed that participants recorded times approximately 16.3 minutes earlier (-4.1-12.2) than the MEMS timestamp, on average. There is no evidence of disagreement for samples before lunch ($p=0.7$) and 600min after waking ($p=0.8$).
+In lme model of time differences (Booklet - Cap), agreement at waking did not show significant bias ($\beta_0:t=-1.1; p=0.29$); however, the +30-minute sample showed that participants recorded times approximately 16.3 minutes earlier (-4.1 + -12.2) than the Cap timestamp, on average. There is no evidence of disagreement for samples before lunch ($p=0.7$) and 600min after waking ($p=0.8$).
 
 *	Between-subject differences in reporting bias are modest (~7 min)
 * Within-subject variability is much larger (~31 min)
@@ -310,7 +364,7 @@ In lme model of time differences (Booklet − MEMS), agreement at waking did not
 Most disagreement arises from occasion-to-occasion variability, not consistent subject-specific bias.
 
 Correlation is invariant to shifts:
-* If Booklet times are always 10 minutes later than MEMS, correlation can still be ~1.0.
+* If Booklet times are always 10 minutes later than Cap, correlation can still be ~1.0.
 * High correlation does not preclude bias; the mixed model identifies a consistent offset at Sample 2 after accounting for subject-level variability.
 
 
@@ -333,6 +387,7 @@ tbl1 <- spit_df2 %>%
         "+600 min"))) %>% 
   ungroup() %>% 
   select(
+    time_diff_min,
     collection_sample,
     `dhea_(nmol/l)`,
     `cortisol_(nmol/l)`,
@@ -358,12 +413,13 @@ tbl1 <- spit_df2 %>%
     
     # change variable names
     label = list(
+      time_diff_min ~ "Booklet vs Cap Time",
     `dhea_(nmol/l)` ~ "DHEA (nmol/L)"  ,
     `cortisol_(nmol/l)` ~ "Cortisol (nmol/L)",
-    good_bk  ~ "Booklet adherence (±7.5 min)",
-    adeq_bkt  ~ "Booklet adherence (±15 min)",
-    good_mem ~ "MEMS adherence (±7.5 min)",
-    adeq_mem ~ "MEMS adherence (±15 min)"
+    good_bk  ~ "Booklet (±7.5 min)",
+    adeq_bkt  ~ "Booklet (±15 min)",
+    good_mem ~ "Cap (±7.5 min)",
+    adeq_mem ~ "Cap (±15 min)"
     )) %>%
   add_overall() %>%
   # modify_table_body(
@@ -411,7 +467,13 @@ tbl1 <- spit_df2 %>%
   italicize_levels() %>% 
   add_p(pvalue_fun = label_style_pvalue(digits = 2)) %>% 
   modify_spanning_header(
-    c("stat_1", "stat_2", "stat_3", "stat_4") ~ "**Collection Sample**") %>% 
+    c("stat_1", "stat_2", "stat_3", "stat_4") ~ "**Collection Sample**") %>%
+  # # kable extra helps with fitting tables within margins of PDF
+  # as_kable_extra(format = "latex") %>%
+  # kableExtra::kable_styling(
+  #   latex_options = c("hold_position", "scale_down", "repeat_header"),
+  #   font_size = 8)
+  # gt is better looking overall
   as_gt() %>%
   tab_options(
     table.font.size = "small",
@@ -419,6 +481,7 @@ tbl1 <- spit_df2 %>%
     data_row.padding = px(3),
     table.border.top.width = px(2),
     table.border.bottom.width = px(2))
+  
 
 tbl1
 
@@ -469,7 +532,7 @@ tab <- spit_df2 %>%
   filter(!is.na(good_bk)) %>%
   with(table(collection_sample, good_bk))
 
-tab
+addmargins(tab)
 chisq.test(tab)
 fisher.test(tab)
 
@@ -483,39 +546,168 @@ Identify subjects with cortisol levels over 80 nmol/L and DHEA upper limit of
 and should be excluded from analysis
 
 ```{r}
+# identify subjects with biologically implausible values and DHEA levels at 5.205
+spit_df %>% 
+  filter(`dhea_(nmol/l)`== 5.205) 
+
+# exclude any observations for patients from analysis
 spit_df_filt <- spit_df %>% 
-  filter(`cortisol_(nmol/l)` <= 80 & `dhea_(nmol/l)`!=5.205) %>%
+  filter(subjectid != 3037 & `cortisol_(nmol/l)` <= 80) %>% 
   mutate(
     # split time from wake to 30min and after 30min after waking (PI interest)
     # use booklet time as PI requested
     t30 = pmin(bk_min_since_wk, 30),
-    t_after30 = pmax(0, `mems:_sample_interval_decimal_time_(mins)`-30))
+    t_after30 = pmax(0, bk_min_since_wk - 30))
+```
+
+```{r}
+# distribution of cortisol and dhea values
+summary(spit_df$`cortisol_(nmol/l)`)
+hist(spit_df$`cortisol_(nmol/l)`)
+
+summary(spit_df$`dhea_(nmol/l)`)
+hist(spit_df$`dhea_(nmol/l)`)
+```
+
+
+```{r}
+# log-transformed
+hist(log(spit_df$`cortisol_(nmol/l)`))
+
+hist(log(spit_df$`dhea_(nmol/l)`))
 ```
 
 
 
 ```{r}
-pw.model <- lmer(log_cortisol ~ t30 + t_after30 + 
+# build cortisol model
+cortisol.model <- lmer(log_cortisol ~ t30 + t_after30 + 
                    (1|subjectid),
                  data=spit_df_filt)
 
-summary(pw.model)
+summary(cortisol.model)
 
-exp(fixef(pw.model))
+exp(fixef(cortisol.model))
 ```
 
 t30:
-* During first 30min of waking, cortisol increases 0.71% per minute
-* 1.0070562^30 ≈ 1.2348 means cortisol increases to about 23.5% total between waking and 30min
+* During first 30min of waking, cortisol increases 0.62% per minute
+* 1.0061531^30 ≈ 1.202049 means cortisol increases by about 20.2% total between waking and 30min
 
 t_after30:
-* after 30min, cortisol decreases by about 0.21% per minute
-* 0.9978616^60 ≈ 0.8795 or after 30min, cortisol decreases by about 12.1% per hour
+* after 30min, cortisol decreases by about 0.23% per minute
+* 0.9977712^60 ≈ 0.8795 or after 30min, cortisol decreases by about 12.5% per hour
+
+
+```{r}
+tbl_regression(
+  cortisol.model,
+  exponentiate = T,
+  intercept = T,
+  estimate_fun = label_style_sigfig(digits = 5),
+  pvalue_fun = label_style_pvalue(digits = 3),
+  label = list(
+    t30 ~ "30min post wake",
+    t_after30 ~ "After 30min")) %>%
+  as_gt() %>%
+  gt::tab_header(title = "Diurnal Patterns of Cortisol",
+                 subtitle = "LMM Piece-wise Regression w/ Random Intercept")
+```
+
+
+
+```{r}
+# build DHEA model
+DHEA.model <- lmer(log_dhea ~ t30 + t_after30 + 
+                   (1|subjectid),
+                 data=spit_df_filt)
+
+summary(DHEA.model)
+
+exp(fixef(DHEA.model))
+```
+
+t30:
+* During first 30min of waking, DHEA decreases by 1.8% per minute
+* 0.9819271^30 ≈ 0.5786 means DHEA decreases by about 42.1% total between waking and 30min
+
+t_after30:
+* 1-0.9984475: after 30min, DHEA decreases by about 0.2% per minute
+* 0.9984475^60 ≈ 0.911 or after 30min, DHEA decreases by about 8.9% per hour
+
+
+```{r}
+# DHEA table
+tbl_regression(
+  DHEA.model,
+  exponentiate = T,
+  intercept = T,
+  estimate_fun = label_style_sigfig(digits = 3),
+  pvalue_fun = label_style_pvalue(digits = 3),
+    label = list(
+    t30 ~ "30min post wake",
+    t_after30 ~ "After 30min")) %>%
+  as_gt() %>%
+  gt::tab_header(title = "Diurnal Patterns of DHEA",
+                 subtitle = "LMM Piece-wise Regression w/ Random Intercept")
+```
+
+
+
+
+
+
+
+
+```{r}
+tbl_dhea <-
+  tbl_regression(
+    DHEA.model,
+    exponentiate = TRUE,
+    intercept = TRUE,
+    estimate_fun = label_style_sigfig(digits = 3),
+    pvalue_fun = label_style_pvalue(digits = 3),
+    label = list(
+      t30 ~ "30 min post wake",
+      t_after30 ~ "After 30 min")) 
+
+tbl_cort <-
+  tbl_regression(
+    cortisol.model,
+    exponentiate = TRUE,
+    intercept = TRUE,
+    estimate_fun = label_style_sigfig(digits = 3),
+    pvalue_fun = label_style_pvalue(digits = 3),
+    label = list(
+      t30 ~ "30 min post wake",
+      t_after30 ~ "After 30 min"))
+
+
+tbl_merged <-
+  tbl_merge(
+    tbls = list(tbl_dhea, tbl_cort),
+    tab_spanner = c("**DHEA**", "**Cortisol**")) %>%
+  as_gt() %>%
+  gt::tab_header(
+    title = "Diurnal Patterns",
+    subtitle = "Piece-wise Linear Mixed-Effects Models w/ Random Intercepts") 
+
+tbl_merged
+
+```
+
+
+
+
+
+
+
+
 
 ```{r}
 
-tr1 <- emtrends(pw.model, specs = ~ 1, var = "t30")
-tr2 <- emtrends(pw.model, specs = ~ 1, var = "t_after30")
+tr1 <- emtrends(DHEA.model, specs = ~ 1, var = "t30")
+tr2 <- emtrends(DHEA.model, specs = ~ 1, var = "t_after30")
 
 # Combine into one object and contrast
 tr_both <- rbind(tr1, tr2)
@@ -533,7 +725,7 @@ newdat <- expand.grid(
     t30       = pmin(time_min, knot),
     t_after30 = pmax(time_min - knot, 0))
 
-newdat$fit <- predict(pw.model, newdata = newdat, re.form = NA)
+newdat$fit <- predict(DHEA.model, newdata = newdat, re.form = NA)
 
 # convert back to original units
 newdat$exp_fit <- exp(newdat$fit)
