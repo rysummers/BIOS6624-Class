@@ -101,7 +101,7 @@ spit_df <- spit_df %>%
     `mems:_sample_interval_decimal_time_(mins)` = 
       ifelse(collection_sample == 1, 0, 
              `mems:_sample_interval_decimal_time_(mins)`),
-    # log transform response
+    # log transform responses
     log_cortisol = log(`cortisol_(nmol/l)`),
     log_dhea = log(`dhea_(nmol/l)`),
     # calculate time differences between book and MEM
@@ -112,15 +112,10 @@ spit_df <- spit_df %>%
 
 ```
 
-```{r}
-summary(spit_df$time_diff_min)
-hist(spit_df$time_diff_min)
-```
-
 
 Create a datetime variable that merges the collection date and booklet clock time.
 * Use this variable as an anchor to determine minutest since wake-up
-* Additionally, create a column that stores either booklet or MEM clock time based on whether booklet contains a missing value.
+* Additionally, create a column that stores either booklet or MEM clock time based on whether booklet contains a missing value. **Debate whether this should be used in analysis**
 
 ```{r}
 spit_df <- spit_df %>%
@@ -164,6 +159,7 @@ group_by(subjectid, collection_date) %>%
 
 
 Indicate whether Samples 2 and 4 are within 7.5min and 15min acceptance windows for adherence
+
 ```{r}
 targets <- c(`2` = 30, `4` = 600)
 
@@ -224,7 +220,7 @@ spit_df %>%
 
 ```
 
-# Address PI's question about agreement between the subject’s recordings of sampling times compared to the times recorded by an electronic monitoring cap (1)
+## Address PI's question about agreement between the subject’s recordings of sampling times compared to the times recorded by an electronic monitoring cap (1)
 
 Scatter-plot of agreement (stratify by collection sample) for PI
 ```{r}
@@ -243,6 +239,7 @@ cor_by_sample
 ```{r}
 library(ggpubr)
 
+# plot scatterplots for each collection sample along w/pearson
 ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
   geom_point(alpha = 0.5) +
   geom_abline(slope = 1, intercept = 0, linetype = 2, color = "firebrick3") +
@@ -251,18 +248,17 @@ ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
     method = "pearson",
     label.x.npc = "left",
     label.y.npc = "top",
-    size = 3
-  ) +
+    size = 3) +
   labs(
     title = "Booklet vs Cap Collection Time by Sample",
     x = "Cap minutes since wake",
-    y = "Booklet minutes since wake"
-  ) +
+    y = "Booklet minutes since wake") +
   theme_minimal(base_size = 10)
 
 ```
 
 Mixed Model: Is there bias in self-reported times, and does it differ by sample, accounting for repeated measurements within subjects?
+
 ```{r}
 # convert collection sample to factor and create labels for it
 spit_df$collection_sample <- factor(
@@ -276,7 +272,9 @@ spit_df$collection_sample <- factor(
 hist(spit_df$time_diff_min)
 summary(spit_df$time_diff_min)
 
-# booklet minus mem as outcome
+## booklet minus mem as outcome
+## remove intercept so we are conducting t-tests that each collection time is 
+## different from zero
 agrmnt.model <- lmer(
   time_diff_min ~ 0 + collection_sample + (1 | subjectid),
   data = spit_df)
@@ -286,21 +284,23 @@ summary(agrmnt.model)
 ```
 
 ```{r}
-# check residuals to determine if right skewness is extreme enough for this model
+# check residuals to determine if skewness is too extreme for this model approach
 plot(agrmnt.model)   # residuals vs fitted
 qqnorm(resid(agrmnt.model)); qqline(resid(agrmnt.model))
 
-
+# try different methods of estimating SEs
 confint(agrmnt.model, method = "boot")
 library(clubSandwich)
 coef_test(agrmnt.model, vcov = "CR2")
 
 
 ```
-
+The distribution of errors are heavily skewed in the tails. Perhaps this modelling approach can still be used but be more descriptive??
+* any transformation to the time difference outcome would make interpretation difficult due to the occurrence of zeros, which prevents a log-transform.
+* can use boot-strap or robust erros method but this making it more complicated than it needs to be
 
 ```{r}
-
+# table for model using collection sample as a fixed effect
 tbl_regression(
   agrmnt.model,
   intercept = T,
@@ -322,7 +322,7 @@ tbl_regression(
 ```
 
 ```{r}
-# class recommened one - **debatable**
+# class recommended one - **debatable**
 agrmnt.model2 <- lmer(
   bk_min_since_wk ~  mem_min_since_wk + (1 | subjectid),
   data = spit_df)
@@ -332,6 +332,18 @@ summary(agrmnt.model2)
 ```
 
 ```{r}
+library(car)
+# test that beta=0 (bias) & beta1=1 (agreement)
+# conducts a wald test
+  # How far is est param from the hypothesized value, relative to its est variability?
+car::linearHypothesis(agrmnt.model2,
+                      c("(Intercept) = 0", 
+                        "mem_min_since_wk = 1"))
+```
+
+
+```{r}
+# table for simple linear association between timing methods
 tbl_regression(
   agrmnt.model2,
   intercept = T,
@@ -352,25 +364,17 @@ tbl_regression(
   
 ```
 
-
-Intercept should be zero and slope should be 1. 
-
-Interpretation:
-In lme model of time differences (Booklet - Cap), agreement at waking did not show significant bias ($\beta_0:t=-1.1; p=0.29$); however, the +30-minute sample showed that participants recorded times approximately 16.3 minutes earlier (-4.1 + -12.2) than the Cap timestamp, on average. There is no evidence of disagreement for samples before lunch ($p=0.7$) and 600min after waking ($p=0.8$).
-
-*	Between-subject differences in reporting bias are modest (~7 min)
-* Within-subject variability is much larger (~31 min)
-
-Most disagreement arises from occasion-to-occasion variability, not consistent subject-specific bias.
+Intercept should be zero and slope should be 1. *IF agreement exists*
 
 Correlation is invariant to shifts:
 * If Booklet times are always 10 minutes later than Cap, correlation can still be ~1.0.
-* High correlation does not preclude bias; the mixed model identifies a consistent offset at Sample 2 after accounting for subject-level variability.
+* High correlation does not mean there is no bias; the mixed model identifies a consistent bias at Sample 2 after accounting for subject-level variability.
 
 
 ## Address PI's question about adhering to +30min and 600min sampling times (2)
 and create a table 1 (Descriptive Table)
 
+Create table1
 ```{r}
 # variables used to remove NA calculation for samples 1 and 3
 adherence_vars <- c("good_bk", "adeq_bkt", "good_mem", "adeq_mem")
@@ -599,22 +603,6 @@ t_after30:
 * 0.9977712^60 ≈ 0.8795 or after 30min, cortisol decreases by about 12.5% per hour
 
 
-```{r}
-tbl_regression(
-  cortisol.model,
-  exponentiate = T,
-  intercept = T,
-  estimate_fun = label_style_sigfig(digits = 5),
-  pvalue_fun = label_style_pvalue(digits = 3),
-  label = list(
-    t30 ~ "30min post wake",
-    t_after30 ~ "After 30min")) %>%
-  as_gt() %>%
-  gt::tab_header(title = "Diurnal Patterns of Cortisol",
-                 subtitle = "LMM Piece-wise Regression w/ Random Intercept")
-```
-
-
 
 ```{r}
 # build DHEA model
@@ -637,29 +625,7 @@ t_after30:
 
 
 ```{r}
-# DHEA table
-tbl_regression(
-  DHEA.model,
-  exponentiate = T,
-  intercept = T,
-  estimate_fun = label_style_sigfig(digits = 3),
-  pvalue_fun = label_style_pvalue(digits = 3),
-    label = list(
-    t30 ~ "30min post wake",
-    t_after30 ~ "After 30min")) %>%
-  as_gt() %>%
-  gt::tab_header(title = "Diurnal Patterns of DHEA",
-                 subtitle = "LMM Piece-wise Regression w/ Random Intercept")
-```
-
-
-
-
-
-
-
-
-```{r}
+# merge both model outputs into one table for simplicity
 tbl_dhea <-
   tbl_regression(
     DHEA.model,
@@ -676,7 +642,7 @@ tbl_cort <-
     cortisol.model,
     exponentiate = TRUE,
     intercept = TRUE,
-    estimate_fun = label_style_sigfig(digits = 3),
+    estimate_fun = label_style_sigfig(digits = 4),
     pvalue_fun = label_style_pvalue(digits = 3),
     label = list(
       t30 ~ "30 min post wake",
@@ -696,13 +662,9 @@ tbl_merged
 
 ```
 
+## Supplemental
 
-
-
-
-
-
-
+Are rate of change different between the two time-segments?
 
 ```{r}
 
@@ -715,6 +677,8 @@ contrast(tr_both, method = list("t30 - t_after30" = c(1, -1)))
 
 
 ```
+
+Graph the time trends for cortisol and DHEA
 
 ```{r}
 knot <- 30
@@ -738,10 +702,10 @@ ggplot(newdat, aes(x = time_min, y = fit)) +
            label = paste0(knot, " min"), vjust = 3.5, hjust = -0.1,
            size = 4, color = "black") +
   labs(
-    title = "Mean log(Cortisol) by minutes since waking",
+    title = "Mean log(DHEA) by minutes since waking",
     subtitle = paste0("Piecewise linear slopes with knot at ", knot, " minutes"),
     x = "Minutes since waking",
-    y = "Predicted mean log(Cortisol)") +
+    y = "Predicted mean log(DHEA)") +
   theme_minimal(base_size = 13)
 
 
