@@ -66,7 +66,7 @@ length(unique(spit_raw$SubjectID))
 # number of missing measurements per collection sample
 spit_raw %>%
   #filter(`Collection Sample` != 1) %>%
-  group_by(`Collection Sample`) %>%
+  #group_by(`Collection Sample`) %>%
   summarise(
     bk_miss = sum(is.na(`Booket: Clock Time`)),
     mem_miss = sum(is.na(`MEMs: Clock Time`)),
@@ -412,7 +412,7 @@ ggplot() +
   geom_line(
     data = pred_df %>% dplyr::arrange(mem_min_since_wk),
     aes(x = mem_min_since_wk, y = fit),
-    color = "darkblue", linewidth = 0.5) +
+    color = "darkblue", linewidth = 1) +
   
   annotate(
     "text",
@@ -424,23 +424,6 @@ ggplot() +
 
   labs(
     title = "Booklet vs Cap Collection Time",
-    x = "Cap minutes since wake",
-    y = "Booklet minutes since wake") +
-  theme_minimal(base_size = 10)
-
-```
-
-
-
-```{r}
-# plot scatterplots w/ fitted model line
-ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
-  geom_point(alpha = 0.5) +
-  # perfect agreement line
-  geom_abline(slope = 1, intercept = 0, linetype = 2, color = "firebrick3") +
-  geom_abline(slope = betas[2], intercept = betas[1], color="skyblue") + 
-  labs(
-    title = "Booklet vs Cap Collection Time by Sample",
     x = "Cap minutes since wake",
     y = "Booklet minutes since wake") +
   theme_minimal(base_size = 10)
@@ -860,7 +843,7 @@ tbl_merged
 Are rate of change different between the two time-segments?
 
 ```{r}
-
+# DHEA example
 tr1 <- emtrends(DHEA.model, specs = ~ 1, var = "t30")
 tr2 <- emtrends(DHEA.model, specs = ~ 1, var = "t_after30")
 
