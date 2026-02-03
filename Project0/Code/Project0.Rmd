@@ -46,6 +46,7 @@ library(data.table)
 library(emmeans)
 library(lubridate)
 library(naniar)
+library(ggpubr)
 ```
 
 
@@ -146,12 +147,7 @@ group_by(subjectid, collection_date) %>%
     bk_min_since_wk = as.numeric(difftime(bk_dt, diary_wake_time, 
                                           units = "mins")),
     mem_min_since_wk = as.numeric(difftime(mems_dt, diary_wake_time, 
-                                           units = "mins")),
-    # create knot for piecewise regression - PI wants to kknow if theres
-    # an increase in cortisol and/or DHEA from waking to 30min. Also, rate of
-    # decline after 30min of waking.
-    t30 = pmin(`mems:_sample_interval_decimal_time_(mins)`, 30),
-    t_after30 = pmax(0, `mems:_sample_interval_decimal_time_(mins)`-30),) %>% 
+                                           units = "mins"))) %>% 
   ungroup()
 
 ```
@@ -237,25 +233,25 @@ cor_by_sample
 ```
 
 ```{r}
-library(ggpubr)
-
-# plot scatterplots for each collection sample along w/pearson
-ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, linetype = 2, color = "firebrick3") +
-  facet_wrap(~ collection_sample) +
-  stat_cor(
-    method = "pearson",
-    label.x.npc = "left",
-    label.y.npc = "top",
-    size = 3) +
-  labs(
-    title = "Booklet vs Cap Collection Time by Sample",
-    x = "Cap minutes since wake",
-    y = "Booklet minutes since wake") +
-  theme_minimal(base_size = 10)
+ 
+# # plot scatterplots for each collection sample along w/pearson
+# ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
+#   geom_point(alpha = 0.5) +
+#   geom_abline(slope = 1, intercept = 0, linetype = 2, color = "firebrick3") +
+#   facet_wrap(~ collection_sample) +
+#   stat_cor(
+#     method = "pearson",
+#     label.x.npc = "left",
+#     label.y.npc = "top",
+#     size = 3) +
+#   labs(
+#     title = "Booklet vs Cap Collection Time by Sample",
+#     x = "Cap minutes since wake",
+#     y = "Booklet minutes since wake") +
+#   theme_minimal(base_size = 10)
 
 ```
+
 
 Mixed Model: Is there bias in self-reported times, and does it differ by sample, accounting for repeated measurements within subjects?
 
@@ -371,6 +367,87 @@ Correlation is invariant to shifts:
 * High correlation does not mean there is no bias; the mixed model identifies a consistent bias at Sample 2 after accounting for subject-level variability.
 
 
+```{r}
+# extract observations actually used by model (excludes NAs in model)
+df_used <- model.frame(agrmnt.model2)
+
+# beta coefficients
+betas <- fixef(agrmnt.model2)
+
+fit <- predict(agrmnt.model2, re.form = NA) 
+se <- predict(agrmnt.model2, re.form = NA, se.fit = TRUE)$se.fit 
+lower <- fit - 1.96 * se 
+upper <- fit + 1.96 * se
+
+pred_df <- df_used %>%
+  dplyr::mutate(
+    fit = fit,
+    lower = lower,
+    upper = upper)
+
+# model equation for plotting
+eq_label <- sprintf(
+  "italic(y) == %.2f %s %.2f*italic(x)",
+  betas[1],
+  ifelse(betas[2] < 0, "-", "+"),
+  abs(betas[2]))
+
+
+```
+
+```{r}
+ggplot() +
+  geom_point(
+    data = spit_df,
+    aes(x = mem_min_since_wk, y = bk_min_since_wk),
+    alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, 
+              linetype = 2, color = "firebrick3") +
+
+  geom_ribbon(
+    data = pred_df,
+    aes(x = mem_min_since_wk, ymin = lower, ymax = upper),
+    fill = "gray35", alpha = 0.25) +
+  
+  geom_line(
+    data = pred_df %>% dplyr::arrange(mem_min_since_wk),
+    aes(x = mem_min_since_wk, y = fit),
+    color = "darkblue", linewidth = 0.5) +
+  
+  annotate(
+    "text",
+    x = 752, y = 900,
+    label = eq_label,
+    parse = T,
+    hjust = 1.05, vjust = -0.5,
+    size = 4) +
+
+  labs(
+    title = "Booklet vs Cap Collection Time",
+    x = "Cap minutes since wake",
+    y = "Booklet minutes since wake") +
+  theme_minimal(base_size = 10)
+
+```
+
+
+
+```{r}
+# plot scatterplots w/ fitted model line
+ggplot(spit_df, aes(x = `mems:_clock_time`, y = `booket:_clock_time`)) +
+  geom_point(alpha = 0.5) +
+  # perfect agreement line
+  geom_abline(slope = 1, intercept = 0, linetype = 2, color = "firebrick3") +
+  geom_abline(slope = betas[2], intercept = betas[1], color="skyblue") + 
+  labs(
+    title = "Booklet vs Cap Collection Time by Sample",
+    x = "Cap minutes since wake",
+    y = "Booklet minutes since wake") +
+  theme_minimal(base_size = 10)
+
+```
+
+
 ## Address PI's question about adhering to +30min and 600min sampling times (2)
 and create a table 1 (Descriptive Table)
 
@@ -417,7 +494,7 @@ tbl1 <- spit_df2 %>%
     
     # change variable names
     label = list(
-      time_diff_min ~ "Booklet vs Cap Time",
+      time_diff_min ~ "Booklet vs Cap Time (min)",
     `dhea_(nmol/l)` ~ "DHEA (nmol/L)"  ,
     `cortisol_(nmol/l)` ~ "Cortisol (nmol/L)",
     good_bk  ~ "Booklet (±7.5 min)",
@@ -426,13 +503,6 @@ tbl1 <- spit_df2 %>%
     adeq_mem ~ "Cap (±15 min)"
     )) %>%
   add_overall() %>%
-  # modify_table_body(
-  #    ~ .x %>%
-  #     mutate(
-  #       across(
-  #         starts_with("stat_"),
-  #         ~ if_else(is.na(.) | str_detect(., "^NA"), "—", .)))) %>% 
-  
     modify_table_body(
     ~ .x %>%
       mutate(
@@ -472,6 +542,10 @@ tbl1 <- spit_df2 %>%
   add_p(pvalue_fun = label_style_pvalue(digits = 2)) %>% 
   modify_spanning_header(
     c("stat_1", "stat_2", "stat_3", "stat_4") ~ "**Collection Sample**") %>%
+  modify_footnote_header(
+    footnote = "Table includes all subject from cohort",
+    columns = all_stat_cols(),
+    replace = FALSE) %>% 
   # # kable extra helps with fitting tables within margins of PDF
   # as_kable_extra(format = "latex") %>%
   # kableExtra::kable_styling(
@@ -491,6 +565,115 @@ tbl1
 
 
 ```
+
+```{r}
+# variables used to remove NA calculation for samples 1 and 3
+adherence_vars <- c("good_bk", "adeq_bkt", "good_mem", "adeq_mem")
+
+tbl1 <- spit_df2 %>%
+  mutate(
+    collection_sample = factor(
+      collection_sample,
+      levels = c(1, 2, 3, 4),
+      labels = c(
+        "Wake",
+        "+30 min",
+        "Before lunch",
+        "+600 min"))) %>% 
+  ungroup() %>% 
+  select(
+    collection_sample,
+    good_bk,
+    adeq_bkt,
+    good_mem,
+    adeq_mem ) %>%
+  
+  tbl_summary(
+    by = collection_sample,
+    type = all_continuous() ~ "continuous2",
+    statistic = list(
+      all_continuous() ~ c(
+        "{mean} ({sd})",
+        "{median} ({p25}, {p75})",
+        "{min} - {max}"),
+      all_categorical() ~ "{p}%"),
+    
+    digits = all_continuous() ~ 1,
+    missing = "ifany",
+    missing_text = "NA",
+    missing_stat = "{p_miss}%",
+    
+    # change variable names
+    label = list(
+    good_bk  ~ "Booklet (±7.5 min)",
+    adeq_bkt  ~ "Booklet (±15 min)",
+    good_mem ~ "Cap (±7.5 min)",
+    adeq_mem ~ "Cap (±15 min)"
+    )) %>%
+  add_overall() %>%
+    modify_table_body(
+    ~ .x %>%
+      mutate(
+        across(
+          starts_with("stat_"),
+          ~ if_else(
+            # only replace NA-looking output for categorical rows / missing rows,
+            # and NOT for continuous variables (continuous2 multi-line rows)
+            var_type != "continuous" &
+              row_type %in% c("level", "missing") &
+              (is.na(.) | str_detect(., "^NA")), "—", .)))) %>% 
+  
+    modify_table_body(
+    ~ .x %>%
+      mutate(
+        # remove Overall NA calculation for adherence variables (misleading to have)
+        stat_0 = if_else(row_type == "missing" & variable %in% adherence_vars, 
+                         "—", stat_0),
+        # remove NA calculation for collection 1 and 3
+        stat_1 = if_else(row_type == "missing" & variable %in% adherence_vars, 
+                         "—", stat_1),
+        stat_3 = if_else(row_type == "missing" & variable %in% adherence_vars, 
+                         "—", stat_3))) %>% 
+  
+    modify_table_body(
+    ~ .x %>%
+      mutate(
+        across(
+          starts_with("stat_"),
+          ~ if_else(
+            # Only touch adherence variables, any row type,
+            # and replace anything that is NA / starts with NA (e.g., NA%, NA (NA%))
+            variable %in% adherence_vars & (is.na(.) | str_detect(., "^NA")),
+            "—", .)))) %>% 
+  bold_labels() %>% 
+  italicize_levels() %>% 
+  add_p(pvalue_fun = label_style_pvalue(digits = 2)) %>% 
+  modify_spanning_header(
+    c("stat_1", "stat_2", "stat_3", "stat_4") ~ "**Collection Sample**") %>%
+  modify_footnote_header(
+    footnote = "Table includes all subject from cohort",
+    columns = all_stat_cols(),
+    replace = FALSE) %>% 
+  # # kable extra helps with fitting tables within margins of PDF
+  # as_kable_extra(format = "latex") %>%
+  # kableExtra::kable_styling(
+  #   latex_options = c("hold_position", "scale_down", "repeat_header"),
+  #   font_size = 8)
+  # gt is better looking overall
+  as_gt() %>%
+  tab_options(
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+  
+
+tbl1
+
+
+```
+
 
 ```{r}
 # instances where there is no booklet or mem time recorded but cortisol/dhea
@@ -585,14 +768,23 @@ hist(log(spit_df$`dhea_(nmol/l)`))
 
 ```{r}
 # build cortisol model
-cortisol.model <- lmer(log_cortisol ~ t30 + t_after30 + 
+cortisol.model <- lmer(log_cortisol ~ t30 + t_after30 +
                    (1|subjectid),
                  data=spit_df_filt)
 
 summary(cortisol.model)
+tidy(cortisol.model, conf.int=T, exponentiate=T)
 
 exp(fixef(cortisol.model))
 ```
+
+```{r}
+# quick check of number of patients and 
+lme4::getME(cortisol.model, "flist") %>%  lapply(nlevels)
+
+```
+For nested model (how subjects differ day-to-day) -> singular, with only 3 days not enough to est.
+* 30 subjects and 86 unique subject-day combinations
 
 t30:
 * During first 30min of waking, cortisol increases 0.62% per minute
@@ -611,6 +803,7 @@ DHEA.model <- lmer(log_dhea ~ t30 + t_after30 +
                  data=spit_df_filt)
 
 summary(DHEA.model)
+tidy(DHEA.model, conf.int=T, exponentiate=T)
 
 exp(fixef(DHEA.model))
 ```
@@ -684,35 +877,42 @@ Graph the time trends for cortisol and DHEA
 knot <- 30
 
 newdat <- expand.grid(
-  time_min = seq(0, max(spit_df_filt$bk_min_since_wk, na.rm = T), by = 1)) %>%
+  time_min = seq(0, 
+                 max(spit_df_filt$bk_min_since_wk, na.rm = TRUE), by = 1)) %>%
   mutate(
     t30       = pmin(time_min, knot),
     t_after30 = pmax(time_min - knot, 0))
 
-newdat$fit <- predict(DHEA.model, newdata = newdat, re.form = NA)
+pred_dhea <- newdat %>%
+  mutate(
+    fit = predict(DHEA.model, newdata = newdat, re.form = NA),
+    hormone = "DHEA")
 
-# convert back to original units
-newdat$exp_fit <- exp(newdat$fit)
+pred_cort <- newdat %>%
+  mutate(
+    fit = predict(cortisol.model, newdata = newdat, re.form = NA),
+    hormone = "Cortisol")
 
-
-ggplot(newdat, aes(x = time_min, y = fit)) +
-  geom_line(linewidth = 0.7) +
-  geom_vline(xintercept = knot, linetype = 2, color="firebrick3") +
-  annotate("text", x = knot, y = max(newdat$fit, na.rm = TRUE),
-           label = paste0(knot, " min"), vjust = 3.5, hjust = -0.1,
-           size = 4, color = "black") +
-  labs(
-    title = "Mean log(DHEA) by minutes since waking",
-    subtitle = paste0("Piecewise linear slopes with knot at ", knot, " minutes"),
-    x = "Minutes since waking",
-    y = "Predicted mean log(DHEA)") +
-  theme_minimal(base_size = 13)
+pred_all <- bind_rows(pred_dhea, pred_cort)
 
 
 ```
 
 
+```{r}
+ggplot(pred_all, aes(x = time_min, y = fit)) +
+  geom_line(linewidth = 0.8) +
+  geom_vline(xintercept = knot, linetype = 2, color = "firebrick3") +
+  facet_wrap(~ hormone, scales = "free_y", nrow=2) +
+  #coord_cartesian(xlim = c(0, 800)) +
+  labs(
+    title = "Predicted mean log levels by minutes since waking",
+    subtitle = paste0("Piecewise linear slopes with knot at ", knot, " minutes"),
+    x = "Minutes since waking",
+    y = "Predicted mean log concentration") +
+  theme_minimal(base_size = 13)
 
+```
 
 
 
