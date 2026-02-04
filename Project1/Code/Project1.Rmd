@@ -1,0 +1,68 @@
+---
+title: 'BIOS 6624 : Project 1'
+author: "Ryan Summers"
+date: "2026-02-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(BiocManager)
+library(knitr)
+library(ggplot2)
+library(tidyverse)
+library(magrittr)
+library(ggfortify)
+library(olsrr)
+library(kableExtra)
+library(doBy)
+library(MASS)
+library(dplyr)
+library(table1)
+library(gtsummary)
+library(gt)
+library(stringdist)
+library(ggrepel)
+library(impute)
+library(limma)
+library(qvalue)
+library(gtools)
+library(multtest)
+library(GEOquery)
+library(Biobase)
+library(minfi)
+library(R.utils)
+library(stringr)
+library(qs)
+library(qs2)
+library(lme4)
+library(patchwork)
+library(lme4)
+library(lmerTest)
+library(data.table)
+library(emmeans)
+library(lubridate)
+library(naniar)
+library(ggpubr)
+```
+
+## Read in the csv
+
+```{r}
+spit_raw <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project0/DataRaw/Project0_Clean_v2.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

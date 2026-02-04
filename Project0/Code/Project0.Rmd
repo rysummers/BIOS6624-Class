@@ -727,7 +727,10 @@ spit_df_filt <- spit_df %>%
     # split time from wake to 30min and after 30min after waking (PI interest)
     # use booklet time as PI requested
     t30 = pmin(bk_min_since_wk, 30),
-    t_after30 = pmax(0, bk_min_since_wk - 30))
+    t_after30 = pmax(0, bk_min_since_wk - 30),
+    
+    t30_cap = pmin(mem_min_since_wk, 30),
+    t_after30_cap = pmax(0, mem_min_since_wk - 30))
 ```
 
 ```{r}
@@ -760,6 +763,19 @@ tidy(cortisol.model, conf.int=T, exponentiate=T)
 
 exp(fixef(cortisol.model))
 ```
+
+
+```{r}
+# build cortisol model
+cortisol.model2 <- lmer(log_cortisol ~ t30_cap + t_after30_cap +
+                   (1|subjectid),
+                 data=spit_df_filt)
+
+summary(cortisol.model2)
+tidy(cortisol.model2, conf.int=T, exponentiate=T)
+
+```
+
 
 ```{r}
 # quick check of number of patients and 
@@ -798,6 +814,17 @@ t30:
 t_after30:
 * 1-0.9984475: after 30min, DHEA decreases by about 0.2% per minute
 * 0.9984475^60 ≈ 0.911 or after 30min, DHEA decreases by about 8.9% per hour
+
+```{r}
+# build DHEA model
+DHEA.model2 <- lmer(log_dhea ~ t30_cap + t_after30_cap + 
+                   (1|subjectid),
+                 data=spit_df_filt)
+
+summary(DHEA.model2)
+tidy(DHEA.model2, conf.int=T, exponentiate=T)
+```
+
 
 
 ```{r}
