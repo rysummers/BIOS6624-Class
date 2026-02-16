@@ -70,7 +70,10 @@ HIV_raw <- HIV_raw %>%
                              ">=1yr college", "4yr college degree", "Some grad", 
                              "Post-grad degree")),
     hard_drugs = factor(hard_drugs, levels = c(0,1),
-                        labels = c("No", "Yes")))
+                        labels = c("No", "Yes")),
+    ADH = factor(ADH, 
+                 levels = c(1,2,3,4),
+                 labels = c("100%", "95-99%", "75-94%", "<75%")))
     
 ```
 
@@ -318,9 +321,6 @@ base <- HIV_raw %>%
     liv34_0 = LIV34,
     kid0 = KID)
 
-adh1 <- HIV_raw %>%
-  filter(years == 1) %>%
-  transmute(newid, adh1 = ADH)
 
 y2 <- HIV_raw %>%
   filter(years == 2) %>%
@@ -330,6 +330,7 @@ y2 <- HIV_raw %>%
     cd42   = LEU3N,
     physical2  = AGG_PHYS,
     mental2  = AGG_MENT,
+    adh2 = ADH,
     cesd2 = CESD,
     hbp2 = HBP,
     diab2 = DIAB,
@@ -571,19 +572,12 @@ plot(cd4.model)   # residuals vs fitted
 * some outliers but overall residuals look good with raw CD4 values
 
 
+Check distribution of QOL measures to identify odd values
 ```{r}
-
-fit_dcd4  <- lm(d_cd4 ~ hard0 + age0 + bmi0 + factor(smoke0) + factor(educ0) +
-                  factor(race0), 
-                data=ana)
-
-fit_dphys <- lm(d_phys ~ hard0 + age0 + bmi0 + factor(smoke0) + factor(educ0) + 
-                  factor(race0), 
-                data=ana)
-
-fit_dment <- lm(d_ment ~ hard0 + age0 + bmi0 + factor(smoke0) + factor(educ0) +
-                  factor(race0), 
-                data=ana)
+hist(ana2$physical0)
+summary(ana2$physical0)
+hist(ana2$mental0)
+summary(ana2$mental0)
 
 ```
 
