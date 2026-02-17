@@ -2,7 +2,9 @@
 title: 'BIOS 6624 : Project 1'
 author: "Ryan Summers"
 date: "2026-02-04"
-output: html_document
+output:
+  word_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -43,6 +45,12 @@ library(emmeans)
 library(lubridate)
 library(naniar)
 library(ggpubr)
+library(boot)
+library(mediation)
+library(tidybayes)
+library(priorsense)
+library(bayesplot)
+library(posterior)
 ```
 
 ## Read in the csv
@@ -81,7 +89,10 @@ Collapse specific factors
 * education and race - we are not making inferences or estimating the effects of either
 
 ```{r}
-
+HIV_raw <- HIV_raw %>% 
+  mutate(
+    
+  )
 ```
 
 
@@ -196,9 +207,9 @@ HIV_raw %>%
 
 
 ```{r}
-
+# conver to long format
 long_outcomes <- HIV_raw %>%
-  filter(years %in% c(0,1,2) & !is.na(hard_drugs)) %>%
+  filter(years %in% c(0,2) & !is.na(hard_drugs)) %>%
   mutate(log_vload = log(VLOAD)) %>% 
            
   pivot_longer(cols = c(log_vload, LEU3N, AGG_PHYS, AGG_MENT),
@@ -210,7 +221,8 @@ long_outcomes <- HIV_raw %>%
                        log_vload = "Viral Load (log copies/mL)",
                        LEU3N = "CD4+ T-Cell Count",
                        AGG_PHYS = "Physical QOL (0 to 100)",
-                       AGG_MENT = "Mental QOL (0 to 100)"))
+                       AGG_MENT = "Mental QOL (0 to 100)"),
+      years_f = factor(years, levels = c(0, 1, 2), labels = c("0", "1", "2")))
 
 ggplot(long_outcomes, aes(years, value, group = newid, color = hard_drugs)) +
   geom_line(alpha = 0.05) +
@@ -227,75 +239,28 @@ ggplot(long_outcomes, aes(years, value, group = newid, color = hard_drugs)) +
 
 ```
 
-Create table1
-
 ```{r}
-tbl1 <- HIV_raw %>%
-  filter(years == 0) %>%
-  mutate(log10_vload = log10(VLOAD)) %>% 
-  
-  tbl_summary(
-    by = hard_drugs,
-    include = c(AGG_MENT, AGG_PHYS, log10_vload, LEU3N, age, BMI, SMOKE, 
-                EDUCBAS, RACE, CESD, ADH),
-    type = all_continuous() ~ "continuous2",
-    statistic = list(
-      all_continuous() ~ c(
-        "{mean} ({sd})",
-        "{median} ({p25}, {p75})",
-        "{min} - {max}"),
-      all_categorical() ~ "{p}%"),
-    
-    digits = all_continuous() ~ 1,
-    missing = "ifany",
-    missing_text = "NA",
-    missing_stat = "{p_miss}%",
-    
-    # change variable names
-    label = list(
-      AGG_MENT ~ "Mental QOL",
-      AGG_PHYS ~ "Physical QOL",
-      log10_vload  ~  "Viral Load (log<sub>10</sub> copies/mL)",
-      LEU3N  ~ "CD4 T-cell Count",
-      age ~ "Age",
-      BMI ~ "BMI",
-      SMOKE ~ "Smoke",
-      EDUCBAS ~ "Education",
-      RACE ~ "Race",
-      CESD ~ "Depression Scale (>=16 is depressed)")) %>%
-  
-  add_overall() %>%
-  bold_labels() %>% 
-  italicize_levels() %>% 
-  add_p(pvalue_fun = label_style_pvalue(digits = 2)) %>% 
-  modify_spanning_header(
-    c("stat_1", "stat_2") ~ "**Hard Druge Use**") %>%
-  modify_footnote_header(
-    footnote = "Table includes all subjects from cohort at baseline (years=0)",
-    columns = all_stat_cols(),
-    replace = FALSE) %>% 
-  
-  as_gt() %>%
-  gt::fmt_markdown(columns = everything()) %>% 
-  gt::fmt_number(
-    columns = dplyr::starts_with("p.value"),
-    decimals = 2) %>% 
-  tab_options(
-    table.font.size = "small",
-    heading.align = "left",
-    data_row.padding = px(3),
-    table.border.top.width = px(2),
-    table.border.bottom.width = px(2))
-
-tbl1
+ggplot(long_outcomes, aes(x = years_f, y = value, fill = hard_drugs)) +
+  geom_boxplot(outlier.shape = NA, width = 0.7, position = position_dodge(width = 0.75)) +
+  geom_point(
+    aes(color = hard_drugs),
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.75),
+    alpha = 0.08, size = 0.6
+  ) +
+  facet_wrap(~ outcome, scales = "free_y") +
+  scale_fill_manual(values = c("steelblue", "firebrick")) +
+  scale_color_manual(values = c("steelblue", "firebrick")) +
+  labs(
+    title = "Treatment Response Distributions by Year and Baseline Hard Drug Use",
+    x = "Year since HAART initiation",
+    y = NULL,
+    fill = "Hard Drugs",
+    color = "Hard Drugs"
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom")
 ```
 
-log10 interpretations 
-* 10^n = where n is number of places after 1
-* 10^8 ≈ in hundreds of millions
-* 10^5 ≈ hundreds of thousands
-* 10^4 ≈ tens of thousands
-* 10^0.2 ≈ 1.6 - in single digits - remember exponent of 0 is 1
 
 ## Model Building
 
@@ -338,7 +303,6 @@ y2 <- HIV_raw %>%
     kid2 = KID)
 
 ana <- base %>%
-  left_join(adh1, by="newid") %>%
   left_join(y2, by="newid") %>% 
     mutate(
     log_vload0 = log10(vload0), # **based on literature log10 is typically used**
@@ -394,11 +358,91 @@ ana2 <- ana %>%
       kid0 == 9 ~ NA_character_,
       TRUE ~ NA_character_) %>% 
       factor(levels = c("No", "Yes")),
-    cesd0 = ifelse(cesd0==-1, NA_character_, cesd0))
+    educ0 = case_when(
+      educ0 %in% c("<=8th grade", "9,10,11th grade", "12th grade") ~ "High School or less",
+      educ0 %in% c(">=1yr college", "4yr college degree") ~ "College",
+      educ0 %in% c("Some grad", "Post-grad degree") ~ "Post-grad",
+      TRUE ~ educ0) %>%
+      factor(),
+    race0 = case_when(
+      race0 %in% c("White Hisp", "Black Hisp", "Other Hisp", "Other") ~ "Hispanic",
+      TRUE ~ race0) %>% 
+      factor(),
+    cesd0 = ifelse(cesd0==-1, NA_character_, cesd0),
+    cesd0 = as.numeric(cesd0))
 ```
 
 
-Create a table 2 to look at univariate relationships between hard drug use and comorbidities
+## Create table1
+
+```{r}
+tbl1 <- ana2 %>%
+  
+  tbl_summary(
+    by = hard0,
+    include = c(mental0, physical0, log_vload0, cd40, age0, bmi0, smoke0, 
+                educ0, race0, cesd0), # add ADH or no?
+    type = all_continuous() ~ "continuous2",
+    statistic = list(
+      all_continuous() ~ c(
+        "{mean} ({sd})",
+        "{median} ({p25}, {p75})",
+        "{min} - {max}"),
+      all_categorical() ~ "{n} ({p}%)"),
+    
+    digits = all_continuous() ~ 1,
+    missing = "ifany",
+    missing_text = "NA",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    
+    # change variable names
+    label = list(
+      mental0 ~ "Mental QOL",
+      physical0 ~ "Physical QOL",
+      log_vload0  ~  "Viral Load (log<sub>10</sub> copies/mL)",
+      cd40  ~ "CD4 T-cell Count",
+      age0 ~ "Age",
+      bmi0 ~ "BMI",
+      smoke0 ~ "Smoke",
+      educ0 ~ "Education",
+      race0 ~ "Race",
+      cesd0 ~ "Depression Scale (>=16 is depressed)")) %>% 
+  
+  add_overall() %>%
+  bold_labels() %>% 
+  italicize_levels() %>% 
+  #add_p(pvalue_fun = label_style_pvalue(digits = 2)) %>% 
+  add_n() %>% 
+  modify_spanning_header(
+    c("stat_1", "stat_2") ~ "**Hard Druge Use**") %>%
+  modify_footnote_header(
+    footnote = "Table includes all subjects from cohort at baseline (years=0)",
+    columns = all_stat_cols(),
+    replace = FALSE) %>% 
+  
+  as_gt() %>%
+  gt::fmt_markdown(columns = everything()) %>% 
+  gt::fmt_number(
+    columns = dplyr::starts_with("p.value"),
+    decimals = 2) %>% 
+  tab_options(
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+
+tbl1
+
+```
+
+log10 interpretations 
+* 10^n = where n is number of places after 1
+* 10^8 ≈ in hundreds of millions
+* 10^5 ≈ hundreds of thousands
+* 10^4 ≈ tens of thousands
+* 10^0.2 ≈ 1.6 - in single digits - remember exponent of 0 is 1Create a table 2 to look at univariate relationships between hard drug use and comorbidities
 
 ```{r}
 tbl2 <- ana2 %>%
@@ -518,7 +562,7 @@ tidy(vload.model3, conf.int = TRUE, exponentiate = FALSE) %>%
 
 Look at multicollinearity issues if present
 ```{r}
-car::vif(d_vload.model3)
+car::vif(vload.model3)
 ```
 
 
@@ -553,6 +597,15 @@ tidy(cd4.model, conf.int = TRUE, exponentiate = FALSE) %>%
     conf.high = round(conf.high, 3))
 ```
 
+Indentify why I'm getting contrast error
+```{r}
+table(ana2$hard0, useNA = "ifany")
+table(ana2$smoke0, useNA = "ifany")
+table(ana2$educ0, useNA = "ifany")
+table(ana2$race0, useNA = "ifany")
+```
+
+
 After adjusting for baseline CD4+ T cell counts age, BMI, smoking, education, and race, baseline hard-drug users had an estimated 42.9% lower viral load at Year 2 compared with non-users (1-0.571), but this difference did not reach significance (p = 0.232).
 
 Look at distribution of CD4 T cell count, log counts, and boxplots between drug user group
@@ -569,6 +622,7 @@ Check that residuals look good using raw CD4 counts
 plot(cd4.model)   # residuals vs fitted
 
 ```
+
 * some outliers but overall residuals look good with raw CD4 values
 
 
@@ -583,14 +637,299 @@ summary(ana2$mental0)
 
 
 
+Build Mental QOL outcome model (frequentist)
+```{r}
+options(scipen = 999)
+
+mental.model <- lm(mental2 ~ factor(hard0) + mental0 + age0 + bmi0 + factor(smoke0) + 
+                       factor(educ0) + factor(race0),
+              data=ana2)
+
+summary(mental.model)
+
+tidy(mental.model, conf.int = TRUE, exponentiate = FALSE) %>% 
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 3),
+    p.value = round(p.value, 3),
+    conf.low = round(conf.low, 3),
+    conf.high = round(conf.high, 3))
+```
+
+
+Build Physical QOL outcome model (frequentist)
+```{r}
+options(scipen = 999)
+
+physical.model <- lm(physical2 ~ factor(hard0) + physical0 + age0 + bmi0 + factor(smoke0) + 
+                       factor(educ0) + factor(race0),
+              data=ana2)
+
+summary(physical.model)
+
+tidy(physical.model, conf.int = TRUE, exponentiate = FALSE) %>% 
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 3),
+    p.value = round(p.value, 3),
+    conf.low = round(conf.low, 3),
+    conf.high = round(conf.high, 3))
+```
+
+## Mediation Analysis
+
+Adherence variable is ordinal in nature and values are not evenly spaced. Therefore,
+we can't use a linear approach. Let's try converting to a binary and see results
+
+```{r}
+ana2 <- ana2 %>%
+  mutate(
+    adh_bin = case_when(
+      adh2 %in% c("100%","95-99%") ~ 1,  # ≥95%
+      adh2 %in% c("75-94%", "<75%") ~ 0,  # <95%
+      TRUE ~ NA_real_),
+    adh_bin = factor(adh_bin, levels = c(0,1),
+                     labels = c("<95%", "≥95%")))
+```
+
+We also need a complete case analysis or we will keep getting "number of observations do not match between mediator and outcome models" error
+
+```{r}
+# complete case analysis
+ana2_cc <- ana2 %>%
+  select(cd42, hard0, adh_bin, cd40,
+         age0, bmi0, smoke0, educ0, race0) %>%
+  na.omit() %>%
+  droplevels()
+```
 
 
 
+Custom function for calculating mediation coefficients
+```{r}
+# boot_fun <- function(data, idx) {
+#   d <- data[idx, ]
+#   m <- glm(adh_bin ~ hard0 + age0 + bmi0 + smoke0 + educ0 + race0, 
+#            family = binomial,
+#            data = d)
+#   y <- lm(cd42 ~ hard0 + adh_bin + cd40 +
+#             age0 + bmi0 + smoke0 + educ0 + race0, data = d)
+# 
+#   a <- coef(m)["hard0"]     
+#   b <- coef(y)["adh2"]
+#   cprime <- coef(y)["hard0"]
+# 
+#   c(indirect = a*b, direct = cprime, total = cprime + a*b)
+# }
+# 
+# set.seed(1)
+# bt <- boot(ana2_cc, statistic = boot_fun, R = 2000)
+# 
+# boot.ci(bt, type = "perc", index = 1)  # indirect
+# boot.ci(bt, type = "perc", index = 2)  # direct
+# boot.ci(bt, type = "perc", index = 3)  # total
+```
 
 
+Pre-lim mediation analysis w/out Covs
+```{r}
+# Fit our three models
+mod2_crude <- lm(cd42 ~ hard0, data=ana2_cc) # Y~X
+mod2_adjusted <- lm(cd42 ~ hard0 + adh_bin, data=ana2_cc) # Y~ X+M
+mod2_covariate <- glm(adh_bin ~ hard0, 
+                     family = binomial,
+                     data=ana2_cc) # M~X
+
+# Extract coefficients
+coef(mod2_crude)
+coef(mod2_adjusted)
+coef(mod2_covariate)
+```
 
 
+DAG
+```{tikz, tikz-med, fig.ext = 'png', cache=TRUE, echo=F, fig.align="center", fig.width=4}
+\usetikzlibrary{arrows}
+\begin{tikzpicture}[node distance=4cm, auto,>=latex, thick, scale = 0.5]
+\node (X) [align=center] {Hard Drug Use \\ ($X$)};
+\node (M) [align=center,above of=X,xshift=2cm,yshift=-2cm] {Adherence \\ ($M$)};
+\node (Y) [align=center,right of=X] {Year 2 CD4 \\ ($Y$)};
+\draw[->] (X) to node [above left] {$\hat{\gamma}_{X}=1.59$} (M);
+\draw[->] (M) to node [above right] {$\hat{\beta}_{M}=98.03$} (Y);
+\draw[->] (X) to node [align=center,swap] {$\hat{\beta}_{adj}=-202.55$ \\ $\hat{\beta}_{crude}=-193.91$} (Y);
+\end{tikzpicture}
+```
+
+Using mediation package
+```{r}
+# Mediator model: adherence as outcome
+m_mod <- glm(adh_bin ~ hard0 + age0 + bmi0 + smoke0 + educ0 + race0, 
+             family = binomial,
+            data = ana2_cc)
+
+# Outcome model: Year-2 viral load, adjusting for baseline viral load + adherence
+y_mod <- lm(cd42 ~ hard0 + adh_bin + cd40 +
+              age0 + bmi0 + smoke0 + educ0 + race0, 
+            data = ana2_cc)
+
+# Mediation estimation (bootstrap for inference)
+med_vl <- mediate(m_mod, y_mod, treat = "hard0", mediator = "adh_bin",
+                  boot = F, sims = 2000)
+
+summary(med_vl)
+
+```
+
+```{r}
+table(ana2_cc$race0)
+table(ana2_cc$adh_bin)
+```
+```{r}
+library(brms)
+
+# Mediator model
+med_model <- bf(adh_bin ~ hard0 + cd40 + age0 + bmi0 + smoke0 + educ0 + race0,
+                family = bernoulli(link = "logit"))
+
+# Outcome model
+out_model <- bf(cd42 ~ hard0 + adh_bin + cd40 +
+                age0 + bmi0 + smoke0 + educ0 + race0,
+                family = gaussian())
+
+med.brm.fit <- brm(med_model + out_model + set_rescor(FALSE),
+                   chains = 4, cores = 6, iter = 2000,
+           data = ana2_cc)
+```
+
+```{r}
+table(ana2_cc$adh_bin, useNA="ifany")
+```
+
+```{r}
+summary(med.brm.fit)
+```
 
 
+Extract the draws
+
+```{r}
+# extract posterior draws 
+med_draws <- as_draws_df(med.brm.fit)
+
+# get parameter names
+names(med_draws)[grepl("^b_", names(med_draws))]
+```
+
+### Diagnsotics for Bayesian Mediation Model
+
+```{r, eval=F}
+# diagnostics
+mcmc_areas(med_draws,prob = 0.95,
+             pars = c("b_adhbin_hard0Yes"))
+```
+
+```{r, eval=F}
+# Trace plots for each parameter
+mcmc_trace(post_samples,
+           pars = c("b_adhbin_hard0Yes", "b_cd42_hard0Yes"))
+
+```
+
+```{r}
+levels(ana2_cc$hard0)
+names(med_draws)[grepl("^b_", names(med_draws))]
+```
+
+```{r}
+## X = drug use & M = adherence
+
+## We are using complete-case analysis so use ana2_cc dataset
+
+# make sure hard0 has the right reference 
+ana2_cc$hard0 <- relevel(factor(ana2_cc$hard0), ref = "No")
+
+# mediator levels - current reference is <95%
+levM <- levels(ana2_cc$adh_bin)
+m0 <- levels(ana2_cc$adh_bin)[1] # reference
+m1 <- levels(ana2_cc$adh_bin)[2]      
+
+# create new dataset with X set to No and Yes
+hd_NO <- ana2_cc
+hd_NO$hard0 <- factor("No", levels = levels(ana2_cc$hard0))
+
+hd_YES <- ana2_cc
+hd_YES$hard0 <- factor("Yes", levels = levels(ana2_cc$hard0))
+
+# Posterior expected adherence probabilities P(M=1|X,C)
+# For bern, posterior_epred gives probability of success (i.e., P(M == m1))
+pM0 <- posterior_epred(med.brm.fit, resp = "adhbin", newdata = hd_NO)  
+pM1 <- posterior_epred(med.brm.fit, resp = "adhbin", newdata = hd_YES)  
+
+# Posterior expected CD4 means for each X and each fixed mediator level
+# Build newdata that sets adh_bin to m0 or m1
+hd_NO_lt95 <- hd_NO; hd_NO_lt95$adh_bin <- factor(m0, levels = levM)
+hd_NO_gt95 <- hd_NO; hd_NO_gt95$adh_bin <- factor(m1, levels = levM)
+
+hd_YES_lt95 <- hd_YES; hd_YES_lt95$adh_bin <- factor(m0, levels = levM)
+hd_YES_gt95 <- hd_YES; hd_YES_gt95$adh_bin <- factor(m1, levels = levM)
+
+# expected CD4 if No hard drugs w/ <95% ADH + Covs
+mu0_m0 <- posterior_epred(med.brm.fit, resp = "cd42", newdata = hd_NO_lt95)  
+# expected CD4 if No hard drugs w/ ≥95% ADH + Covs
+mu0_m1 <- posterior_epred(med.brm.fit, resp = "cd42", newdata = hd_NO_gt95)  
+# expected CD4 if Yes hard drugs w/ <95% ADH + Covs
+mu1_m0 <- posterior_epred(med.brm.fit, resp = "cd42", newdata = hd_YES_lt95)  
+# expected CD4 if Yes hard drugs w/ ≥95% ADH + Covs
+mu1_m1 <- posterior_epred(med.brm.fit, resp = "cd42", newdata = hd_YES_gt95)  
+
+## Standardize over the mediator distribution:
+ # 1 - pM0 = prob of low ADH ; pM0 = prob of high ADH | No hard drug use
+ # 1 - pM1 = prob of low ADH ; pM1 = prob of high ADH | Yes hard drug use
+EY_0M0 <- rowMeans(mu0_m0 * (1 - pM0) + mu0_m1 * pM0) # pop-level E[CD4|X=0]
+EY_1M1 <- rowMeans(mu1_m0 * (1 - pM1) + mu1_m1 * pM1) # pop-level E[CD4|X=1]
+
+# expectation of CD4 if a hard drug user but ADH behaved as if they were NOT
+# a drug user
+EY_1M0 <- rowMeans(mu1_m0 * (1 - pM0) + mu1_m1 * pM0)
+
+## CD4 depends on adherence.
+## ADH depends on drug use.
+## So to understand mediation, we must avg CD4 preds over how often people are ADH
+
+# calculate the effects
+TE  <- EY_1M1 - EY_0M0
+NIE <- EY_1M1 - EY_1M0
+NDE <- EY_1M0 - EY_0M0
+
+# summarize
+summ <- function(x) {
+  c(
+    mean = mean(x),
+    hdi_low = hdi(x, prob = 0.95)[1],
+    hdi_high = hdi(x, prob = 0.95)[2],
+    Pr_gt_0 = mean(x > 0))
+  }
+
+rbind(TE = summ(TE), NIE = summ(NIE), NDE = summ(NDE))
+```
+
+Total Effect (TE)
+Interpretation:
+Moving from No hard drug use to Yes hard drug use is associated with an average decrease of about 168 CD4 cells at Year 2.
+
+Indirect Effect (NIE-mediation through adherence)
+Interpretation:
+There is strong posterior evidence that adherence mediates part of the association.
+
+Direct Effect (NDE)
+Interpretation:
+Even if adherence were held constant, hard drug use would still be associated with a ~174 cell lower CD4 count.
+
+This suggests that most of the effect is not explained by adherence
+
+Proportion Mediated
+mean(NIE / TE) = 6/168 ≈ 3.6%
 
 
