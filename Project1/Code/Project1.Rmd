@@ -933,3 +933,75 @@ Proportion Mediated
 mean(NIE / TE) = 6/168 ≈ 3.6%
 
 
+## Dropout Rates
+
+```{r}
+ana2$complete_cd4 <- ifelse(!is.na(ana2$cd42), 1, 0)
+
+table(ana2$complete_cd4, ana2$hard0)
+t.test(cd40 ~ complete_cd4, data = ana2)
+```
+
+```{r}
+ana2_drop <- ana2 %>%
+  mutate(
+    hard0 = factor(hard0, levels = c("No", "Yes"), exclude = NULL),
+    followup_status = factor(
+      if_else(complete == 1, "Complete (baseline + Year 2) CD4", "Missing Year 2 CD4"),
+      levels = c("Complete (baseline + Year 2)", "Missing Year 2")))
+
+tbl_dropout <- ana2_drop %>%
+  tbl_summary(
+    by = followup_status,
+    include = c(
+      hard0, age0, bmi0, smoke0, educ0, race0,
+      log_vload0, cd40, physical0, mental0, cesd0),
+    type = list(
+      hard0 ~ "categorical",
+    all_continuous() ~ "continuous2"),
+    statistic = list(
+      all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),
+      all_categorical() ~ "{n} ({p}%)"),
+    digits = all_continuous() ~ 1,
+    missing = "ifany",
+    missing_text = "NA",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+      hard0 ~ "Baseline hard drug use",
+      age0 ~ "Age",
+      bmi0 ~ "BMI",
+      smoke0 ~ "Smoking status",
+      educ0 ~ "Education",
+      race0 ~ "Race/ethnicity",
+      log_vload0 ~ "Baseline viral load (log10 copies/mL)",
+      cd40 ~ "Baseline CD4 T-cell Count",
+      physical0 ~ "Baseline physical QOL",
+      mental0 ~ "Baseline mental QOL",
+      cesd0 ~ "Baseline CESD score")) %>%
+  add_p(pvalue_fun = ~style_pvalue(.x, digits = 3)) %>%
+  add_n() %>% 
+  add_overall() %>%
+  bold_labels() %>% 
+  as_gt() %>%
+    modify_footnote_header(
+    footnote = "Follow-up status defined based on availability of Year 2 CD4 measurement.",
+    columns = all_stat_cols(),
+    replace = FALSE)
+  tab_options(
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+tbl_dropout
+```
+
+Missing data under ana2 format where each row is one subject showing baseline and year 2
+```{r}
+ana2_drop %>%
+  ungroup() %>% 
+  miss_var_summary()
+```
+
+
