@@ -51,6 +51,9 @@ library(tidybayes)
 library(priorsense)
 library(bayesplot)
 library(posterior)
+library(brms)
+library(bayestestR)
+library(purrr)
 ```
 
 ## Read in the csv
@@ -59,6 +62,7 @@ library(posterior)
 HIV_raw <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataRaw/hiv_6624_final.csv",
                     col_select = -1) # col_select = -1 removes first column
 ```
+
 ## Data Management & Cleanup
 
 Convert specific variables to factors
@@ -85,178 +89,8 @@ HIV_raw <- HIV_raw %>%
     
 ```
 
-Collapse specific factors
-* education and race - we are not making inferences or estimating the effects of either
 
-
-## Exploratory Data Analysis (EDA)
-
-Missing value analysis:
-```{r}
-# number of NAs
-lapply(HIV_raw, function(x) sum(is.na(x)))
-```
-
-```{r}
-# missing value percentages
-HIV_raw %>%
-  ungroup() %>% 
-  miss_var_summary()
-
-```
-
-```{r}
-# number of subjects
-length(unique(HIV_raw$newid))
-```
-
-Look at distribution of measurements (cumulatively)
-```{r}
-# measurement stats
-HIV_raw %>% 
-  group_by(newid) %>%
-  summarise(n_measurements = n()) -> mnts_per_id 
-
-# summary stats for number of measurements per subject
-mnts_per_id %>%   
-  summarise(avg = mean(n_measurements),
-            min = min(n_measurements),
-            med = median(n_measurements),
-            max = max(n_measurements))
-
-# distribution of measurements
-hist(mnts_per_id$n_measurements, breaks=11, freq = FALSE)
-```
-
-```{r}
-# percentage distribution of measurements
-mnts_per_id %>%
-  dplyr::count(n_measurements) %>%
-  mutate(percent = round(100 * n / sum(n) , 1))
-
-# cumulative percentages (e.g. % more than 3 measurements)
-mnts_per_id %>%
-  reframe(
-    threshold = 1:9,
-    percent_gt = sapply(threshold, function(k) {
-      mean(n_measurements > k) * 100
-      }))
-
-```
-
-How many observations per race category?
-```{r}
-HIV_raw %>% 
-  group_by(RACE) %>% 
-  summarize(n = n())
-```
-
-Problems arise when race is:
-* Interpreted biologically
-* Used as a proxy for genetic ancestry
-* Over-interpreted or over-stratified without power
-
-We are not interpreting or estimating race effects, so we should be good to collapse
-
-Potential explanation in final report:
-Self-reported race/ethnicity was included as a covariate to account for potential confounding by social determinants of health and healthcare access disparities. Race/ethnicity categories were collected as [describe original categories]. For analyses with limited statistical power due to sample size, we combined categories as follows: [describe any collapsing]. We acknowledge that race is a social construct and that observed differences likely reflect structural inequities rather than biological differences.
-
-Look at distributions of outcomes
-
-```{r}
-hist(HIV_raw$VLOAD)
-```
-
-Spaghetti plots
-
-```{r}
-HIV_raw %>% 
-  filter(years %in% c(0,1,2) & !is.na(hard_drugs)) %>%
-
-  
-  ggplot(aes(x = years, y = log10(VLOAD), group = newid, color = hard_drugs)) +
-  geom_line(alpha = 0.25, linewidth = 0.6) +
-  geom_point(alpha = 0.25, size = 1.0) +
-  stat_summary(aes(group = hard_drugs), fun = mean, geom = "line",
-               linewidth = 0.75, color = "firebrick") +
-  facet_wrap(~ hard_drugs, ncol = 3) +
-  scale_color_manual(values = c("steelblue", "rosybrown2")) +
-  #geom_smooth(aes(group=hard_drugs), se=F) +
-  labs(
-    title = "Viral Load Trajectories From Baseline to Year 2, Stratified by Drug Users",
-    subtitle = "Faint lines = subjects; bold red lines = group means",
-    x = "Year", y = "Viral Load log10 copies/ml", color = "Group") +
-  theme_minimal() +
-  theme(legend.position = "none",
-        axis.text.x = element_text(angle = 45, hjust = 1))
-```
-
-```{r}
-# number missing for hard drug group
-HIV_raw %>% 
-  group_by(hard_drugs) %>% 
-  summarize(n = n())
-```
-
-
-```{r}
-# conver to long format
-long_outcomes <- HIV_raw %>%
-  filter(years %in% c(0,2) & !is.na(hard_drugs)) %>%
-  mutate(log_vload = log10(VLOAD)) %>% 
-           
-  pivot_longer(cols = c(log_vload, LEU3N, AGG_PHYS, AGG_MENT),
-               names_to = "outcome",
-               values_to = "value") %>% 
-    
-    mutate(
-      outcome = recode(outcome,
-                       log_vload = "Viral Load (log10 copies/mL)",
-                       LEU3N = "CD4+ T-Cell Count",
-                       AGG_PHYS = "Physical QOL (0 to 100)",
-                       AGG_MENT = "Mental QOL (0 to 100)"),
-      years_f = factor(years, levels = c(0, 1, 2), labels = c("0", "1", "2")))
-
-ggplot(long_outcomes, aes(years, value, group = newid, color = hard_drugs)) +
-  geom_line(alpha = 0.05) +
-  stat_summary(aes(group = hard_drugs), fun = mean, 
-               geom = "line", linewidth = 0.6) +
-  facet_wrap(~ outcome, scales = "free_y") +
-  scale_color_manual(values = c("steelblue", "firebrick")) +
-  labs(title = "Observed Trajectories of Treatment Response",
-       x = "Years",
-       y="",
-       color = "Hard Drugs") +
-  theme_bw() +
-  theme(legend.position = "bottom") 
-
-```
-
-```{r}
-ggplot(long_outcomes, aes(x = years_f, y = value, fill = hard_drugs)) +
-  geom_boxplot(outlier.shape = NA, width = 0.7, position = position_dodge(width = 0.75)) +
-  geom_point(
-    aes(color = hard_drugs),
-    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.75),
-    alpha = 0.08, size = 0.6
-  ) +
-  facet_wrap(~ outcome, scales = "free_y") +
-  scale_fill_manual(values = c("steelblue", "firebrick")) +
-  scale_color_manual(values = c("steelblue", "firebrick")) +
-  labs(
-    title = "Treatment Response Distributions by Year and Baseline Hard Drug Use",
-    x = "Year since HAART initiation",
-    y = NULL,
-    fill = "Hard Drugs",
-    color = "Hard Drugs"
-  ) +
-  theme_bw() +
-  theme(legend.position = "bottom")
-```
-
-
-## Model Building
-
+Create a new dataset with only baseline and year 2 observations (715 subjects)
 ```{r}
 
 base <- HIV_raw %>%
@@ -310,20 +144,10 @@ ana <- base %>%
 
 ```
 
-Calculate the number of insufficient data labels for the comorbidities
-```{r}
-HIV_raw %>%
-  filter(years == 0) %>%
-  summarise(
-    across(
-      c(DIAB, HBP, KID, LIV34, FRP, FP),
-      ~ sum(. == 9, na.rm = TRUE),
-      .names = "n9_{.col}"))
-```
 
 Collapse levels of comorbidities into a simple yes or no category with 9s being converted to NAs. Additionally, for the depression scale (CESD), convert -1 to NAs
 
-```{r}
+```{r label="Collapsing categorical levels"}
 # using baseline values
 ana2 <- ana %>%
   mutate(
@@ -352,9 +176,10 @@ ana2 <- ana %>%
       TRUE ~ NA_character_) %>% 
       factor(levels = c("No", "Yes")),
     educ0 = case_when(
-      educ0 %in% c("<=8th grade", "9,10,11th grade", "12th grade") ~ "High School or less",
-      educ0 %in% c(">=1yr college", "4yr college degree") ~ "College",
-      educ0 %in% c("Some grad", "Post-grad degree") ~ "Post-grad",
+      educ0 %in% c("<=8th grade", "9,10,11th grade", "12th grade", ">=1yr college") 
+      ~ "Didn't finish college or lower",
+      educ0 %in% c("4yr college degree", "Some grad", "Post-grad degree") 
+      ~ "College degree or higher",
       TRUE ~ educ0) %>%
       factor(),
     race0 = case_when(
@@ -366,15 +191,271 @@ ana2 <- ana %>%
 ```
 
 
-## Create table1
+Convert adherence into a binary indicator
+```{r}
+ana2 <- ana2 %>%
+  mutate(
+    adh_bin = case_when(
+      adh2 %in% c("100%","95-99%") ~ 1,  # ≥95%
+      adh2 %in% c("75-94%", "<75%") ~ 0,  # <95%
+      TRUE ~ NA_real_),
+    adh_bin = factor(adh_bin, levels = c(0,1),
+                     labels = c("<95%", "≥95%")))
+```
+
+Insufficient data and implausible values were noted for some BMI values
+```{r}
+ana2 <- ana2 %>%
+  mutate(bmi0 = ifelse(bmi0 %in% c(-1, 999), NA, bmi0))
+```
+
+
+We also need a complete case analysis or we will keep getting "number of observations do not match between mediator and outcome models" error. Also, to be consistent across analyses its probably best we keep the same number of subjects across all models.
+
+**This will be the finalized dataset used for all analyses**
+* 464 subjects with complete cases for baseline and year 2 measurements
+```{r}
+# complete case analysis
+ana2_cc <- ana2 %>%
+  select(log_vload2, log_vload0, cd42, cd40, hard0, adh2, physical0, physical2,
+         mental0, mental2, age0, bmi0, smoke0, educ0, race0, adh_bin) %>%
+  na.omit() %>%
+  droplevels()
+```
+
+## Exploratory Data Analysis (EDA)
+
+Explain how you start with 715 subjects to final N for analyses 
+Clinically meaning changes
+* .5 log10 VL
+* 2pts on QOL
+* 50 CD4
+
+***Remove BMI values that are negative 1 and extreme***
+***Explain why we choose a specific modeling strategy in Methods***
+***If you remove observations, state if they were removed from all analyses***
+***Keep track of sample sizes for each model ran***
+***Show table1 with all subjects that will be used in analyses***
+***Don't show regression coefficients - be more informative to a non-stats person***
+***Label the plots in code that are used in final report***
+***Add frequentist and Bayesian results in one table***
+***reference worksheet 5 for method section write-up***
+***collapse smoker category***
+***Descriptive for adherence and fit hard drug and hard drug + ADH***
+
+```{r label="function for calculating obs per grouping variable"}
+count_grp_obs <- function(data, vars, include_na = TRUE, id = NULL) {
+  stopifnot(is.data.frame(data))
+
+  dat <- dplyr::as_tibble(data) %>%
+    dplyr::select(dplyr::all_of(vars))
+
+  dat_long <- dat %>%
+    tidyr::pivot_longer(
+      cols = everything(),
+      names_to = "variable",
+      values_to = "category") %>%
+    dplyr::mutate(
+      category = dplyr::if_else(is.na(category), 
+                                "Missing", 
+                                as.character(category)))
+
+  if (!include_na) dat_long <- dplyr::filter(dat_long, category != "Missing")
+
+  if (is.null(id)) {
+    dat_long %>%
+      dplyr::count(variable, category, name = "n") %>%
+      dplyr::group_by(variable) %>%
+      dplyr::mutate(pct = n / sum(n)) %>%
+      dplyr::ungroup()
+  } else {
+    data %>%
+      dplyr::select({{ id }}, dplyr::all_of(vars)) %>%
+      tidyr::pivot_longer(-{{ id }}, 
+                          names_to = "variable", 
+                          values_to = "category") %>%
+      dplyr::mutate(
+        category = dplyr::if_else(is.na(category), 
+                                  "Missing", 
+                                  as.character(category))) %>%
+      dplyr::distinct({{ id }}, variable, category) %>%
+      dplyr::count(variable, category, name = "n_subjects") %>%
+      dplyr::group_by(variable) %>%
+      dplyr::mutate(pct_subjects = n_subjects / sum(n_subjects)) %>%
+      dplyr::ungroup()
+  }}
+```
+
+Test function
+```{r}
+count_grp_obs(ana, vars = c("hard0", "smoke0"), mode = "interaction")
+```
+
+
+
+
+Missing value analysis:
+```{r}
+# number of NAs
+# lapply(HIV_raw, function(x) sum(is.na(x)))
+```
 
 ```{r}
-tbl1 <- ana2 %>%
+# missing value percentages
+HIV_raw %>%
+  ungroup() %>% 
+  miss_var_summary()
+
+```
+
+```{r}
+# number of subjects
+length(unique(HIV_raw$newid))
+```
+
+Calculate the number of insufficient data labels for the comorbidities
+```{r}
+HIV_raw %>%
+  filter(years == 0) %>%
+  summarise(
+    across(
+      c(DIAB, HBP, KID, LIV34, FRP, FP),
+      ~ sum(. == 9, na.rm = TRUE),
+      .names = "n9_{.col}"))
+```
+
+Look at distribution of measurements
+```{r}
+# measurement stats
+HIV_raw %>% 
+  group_by(newid) %>%
+  summarise(n_measurements = n()) -> mnts_per_id 
+
+# summary stats for number of measurements per subject
+mnts_per_id %>%   
+  summarise(avg = mean(n_measurements),
+            min = min(n_measurements),
+            med = median(n_measurements),
+            max = max(n_measurements))
+
+# distribution of measurements
+hist(mnts_per_id$n_measurements, breaks=11, freq = FALSE)
+```
+
+```{r}
+# percentage distribution of measurements
+mnts_per_id %>%
+  dplyr::count(n_measurements) %>%
+  mutate(percent = round(100 * n / sum(n) , 1))
+
+# cumulative percentages (e.g. % more than 3 measurements=70.1%)
+mnts_per_id %>%
+  reframe(
+    threshold = 1:9,
+    percent_gt = sapply(threshold, function(k) {
+      mean(n_measurements > k) * 100
+      }))
+
+```
+
+How many observations per race category?
+```{r}
+HIV_raw %>% 
+  group_by(RACE) %>% 
+  summarize(n = n())
+```
+
+Problems arise when race is:
+* Interpreted biologically
+* Used as a proxy for genetic ancestry
+* Over-interpreted or over-stratified without power
+
+We are not interpreting or estimating race effects, so we should be good to collapse
+
+Potential explanation in final report:
+Self-reported race/ethnicity was included as a covariate to account for potential confounding by social determinants of health and healthcare access disparities. Race/ethnicity categories were collected as [describe original categories]. For analyses with limited statistical power due to sample size, we combined categories as follows: [describe any collapsing]. We acknowledge that race is a social construct and that observed differences likely reflect structural inequities rather than biological differences.
+
+Look at distributions of outcomes
+
+```{r}
+hist(HIV_raw$VLOAD)
+```
+
+```{r}
+# number missing for hard drug group
+HIV_raw %>% 
+  group_by(hard_drugs) %>% 
+  summarize(n = n())
+```
+
+Spaghetti plots
+```{r}
+# convert to long format
+long_outcomes <- HIV_raw %>%
+  filter(years %in% c(0,1,2) & !is.na(hard_drugs)) %>%
+  mutate(log_vload = log10(VLOAD)) %>% 
+           
+  pivot_longer(cols = c(log_vload, LEU3N, AGG_PHYS, AGG_MENT),
+               names_to = "outcome",
+               values_to = "value") %>% 
+    
+    mutate(
+      outcome = recode(outcome,
+                       log_vload = "Viral Load (log10 copies/mL)",
+                       LEU3N = "CD4+ T-Cell Count",
+                       AGG_PHYS = "Physical QOL (0 to 100)",
+                       AGG_MENT = "Mental QOL (0 to 100)"),
+      years_f = factor(years, levels = c(0, 1, 2), labels = c("0", "1", "2")))
+
+ggplot(long_outcomes, aes(years, value, group = newid, color = hard_drugs)) +
+  geom_line(alpha = 0.05) +
+  stat_summary(aes(group = hard_drugs), fun = mean, 
+               geom = "line", linewidth = 0.6) +
+  facet_wrap(~ outcome, scales = "free_y") +
+  scale_color_manual(values = c("steelblue", "firebrick")) +
+  labs(title = "Observed Trajectories of Treatment Response",
+       x = "Years",
+       y="",
+       color = "Hard Drugs") +
+  theme_bw() +
+  theme(legend.position = "bottom") 
+
+```
+
+```{r}
+ggplot(long_outcomes, aes(x = years_f, y = value, fill = hard_drugs)) +
+  geom_boxplot(outlier.shape = NA, width = 0.7, position = position_dodge(width = 0.75)) +
+  geom_point(
+    aes(color = hard_drugs),
+    position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.75),
+    alpha = 0.08, size = 0.6
+  ) +
+  facet_wrap(~ outcome, scales = "free_y") +
+  scale_fill_manual(values = c("steelblue", "firebrick")) +
+  scale_color_manual(values = c("steelblue", "firebrick")) +
+  labs(
+    title = "Treatment Response Distributions by Year and Baseline Hard Drug Use",
+    x = "Year since HAART initiation",
+    y = NULL,
+    fill = "Hard Drugs",
+    color = "Hard Drugs"
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+
+
+
+### table1 Demographics
+
+```{r}
+tbl1 <- ana2_cc %>%
   
   tbl_summary(
     by = hard0,
     include = c(mental0, physical0, log_vload0, cd40, age0, bmi0, smoke0, 
-                educ0, race0, cesd0), # add ADH or no?
+                educ0, race0), # add ADH or no?
     type = all_continuous() ~ "continuous2",
     statistic = list(
       all_continuous() ~ c(
@@ -398,8 +479,7 @@ tbl1 <- ana2 %>%
       bmi0 ~ "BMI",
       smoke0 ~ "Smoke",
       educ0 ~ "Education",
-      race0 ~ "Race",
-      cesd0 ~ "Depression Scale (>=16 is depressed)")) %>% 
+      race0 ~ "Race")) %>% 
   
   add_overall() %>%
   bold_labels() %>% 
@@ -435,7 +515,9 @@ log10 interpretations
 * 10^8 ≈ in hundreds of millions
 * 10^5 ≈ hundreds of thousands
 * 10^4 ≈ tens of thousands
-* 10^0.2 ≈ 1.6 - in single digits - remember exponent of 0 is 1Create a table 2 to look at univariate relationships between hard drug use and comorbidities
+* 10^0.5 ≈ 3.16 - in single digits - remember exponent of 0 is 1
+
+Create a table 2 to look at univariate relationships between hard drug use and comorbidities
 
 ```{r}
 tbl2 <- ana2 %>%
@@ -489,24 +571,110 @@ tbl2 <- ana2 %>%
 tbl2
 ```
 
-* Collider bias? - do these comorbidities occur after exposure and outcome?
- - The exposure and outcome can both independently create a collider variable. In contrast to the case of confounding, where the confounder is associated with both the exposure and outcome, the collider is created by both the exposure and outcome.
- - Comorbidities can be downstream effects of higher viral load/cd4 and hard drug use,
- independently. Therefore, these comorbidities could very well be colliders
- 
+
 * Rates of liver and kidney disease are higher in drug users (3.2% vs 9.7% and 16% vs 34%, respectively). No difference in diabetes and higher blood pressure is more prevalent in
 the non-drug use group (27% vs 15%). Also, there is pretty substantial missing values
 for the kidney (71%), diabetes (57%), and liver (34%) groups. 
 
 
+## Primary Analysis
+* How treatment response differs between hard drug users and non-users
+
+* Collider bias? - do these comorbidities occur after exposure and outcome?
+ - The exposure and outcome can both independently create a collider variable. In contrast to the case of confounding, where the confounder is associated with both the exposure and outcome, the collider is created by both the exposure and outcome.
+ - Comorbidities can be downstream effects of higher viral load/cd4 and hard drug use,
+ independently. Therefore, these comorbidities could very well be colliders
+ 
+
+Streamline method utilizing functions to fit all models at once
+```{r}
+outcomes <- list(
+  cd4   = list(y = "cd42", baseline = "cd40"),
+  vload = list(y = "log_vload2", baseline = "log_vload0"),
+  phys  = list(y = "physical2", baseline = "physical0"),
+  ment  = list(y = "mental2", baseline = "mental0"))
+```
+
+```{r label="Function to perform all primary models at once"}
+fit_models <- function(outcome, baseline, data) {
+  # model form
+  formula <- as.formula(
+    paste(outcome, "~ hard0 +", baseline,
+          "+ age0 + bmi0 + smoke0 + educ0 + race0"))
+  
+  # Frequentist model
+  lm_fit <- lm(formula, data = data)
+  
+  # Bayes model
+  brm_fit <- brm(
+    formula,
+    data = data,
+    family = gaussian(),
+    prior = c(
+      # slope of 1 on log10 is 10-fold difference in viral load (weakly informative)
+      prior(normal(0, 1), class = "b"),
+      prior(normal(0, 5), class = "Intercept"), # less interpretable so make var wider
+      prior(student_t(3, 0, 2.5), class = "sigma")), # half-t - standard
+    chains = 4, cores = 6, iter = 2000,
+    refresh = 0)
+  
+  # export model results into a list
+  list(lm = lm_fit, brm = brm_fit)
+}
+```
+
+Run all models at once
+```{r}
+model.fits <- imap(outcomes, ~ fit_models(.x$y, .x$baseline, ana2_cc))
+```
+
+
+ 
+
+### Viral Load as outcome (N=464):
+```{r label = "frequentist model"}
+#options(scipen = 999)
+
+vload.model <- lm(log_vload2 ~ factor(hard0) + log_vload0 + age0 + bmi0 + factor(smoke0) + 
+                       factor(educ0) + factor(race0),
+              data=ana2_cc)
+
+summary(vload.model)
+nobs(vload.model)
+
+tidy(vload.model, conf.int = TRUE, exponentiate = FALSE) %>% 
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 3),
+    p.value = round(p.value, 3),
+    conf.low = round(conf.low, 3),
+    conf.high = round(conf.high, 3),
+    vload_copies_ml = round(10^estimate, 3),
+    vload_ml_LL = round(10^conf.low, 3),
+    vload_ml_UL = round(10^conf.high, 3))
+```
+
+After adjusting for baseline viral load, age, BMI, smoking, education, and race, baseline hard-drug users had an estimated 8.2% lower viral load at Year 2 compared with non-users (1-0.918), but this difference did not reach significance (p = 0.86).
+
+* We are comparing hard-drug users and non-users while holding the baseline viral load, age, BMI, smoking status, education, and race values constant. In other words, after other affects have been accounted for.
+* The model estimates differences in Year-2 viral load between groups after removing variation attributable to baseline viral load and covariates, effectively comparing individuals at the same starting level.
+
+Test to see if comorbidities can be used as precision variables or may be
+on the casual pathway from drug use to viral load - **ignore for primary analysis**
 ```{r}
 options(scipen = 999)
 
-vload.model2 <- lm(log_vload2 ~ factor(hard0) + log_vload0 + age0 + bmi0 + factor(smoke0) + 
-                       factor(educ0) + factor(race0),
-              data=ana)
+vload.model2 <- lm(log_vload2 ~ 
+                       # comorbidites
+                       factor(hbp0) + factor(diab0) + factor(liv34_0) + factor(kid0) +
+                       # Primary
+                       factor(hard0) + log_vload0 + age0 + bmi0 + 
+                       factor(smoke0) + factor(educ0) + factor(race0),
+              data=ana2)
 
 summary(vload.model2)
+nobs(vload.model2)
 
 tidy(vload.model2, conf.int = TRUE, exponentiate = FALSE) %>% 
   mutate(
@@ -521,64 +689,72 @@ tidy(vload.model2, conf.int = TRUE, exponentiate = FALSE) %>%
     vload_ml_UL = round(10^conf.high, 3))
 ```
 
-After adjusting for baseline viral load, age, BMI, smoking, education, and race, baseline hard-drug users had an estimated 42.9% lower viral load at Year 2 compared with non-users (1-0.571), but this difference did not reach significance (p = 0.232).
-
-* We are comparing hard-drug users and non-users while holding the baseline viral load, age, BMI, smoking status, education, and race values constant. In other words, after other affects have been accounted for.
-* The model estimates differences in Year-2 viral load between groups after removing variation attributable to baseline viral load and covariates, effectively comparing individuals at the same starting level.
-
-Test to see if comorbidities can be used as precision variables or may be
-on the casual pathway from drug use to viral load
-```{r}
-options(scipen = 999)
-
-vload.model3 <- lm(log_vload2 ~ 
-                       # comorbidites
-                       factor(hbp0) + factor(diab0) + factor(liv34_0) + factor(kid0) +
-                       # Primary
-                       factor(hard0) + log_vload0 + age0 + bmi0 + 
-                       factor(smoke0) + factor(educ0) + factor(race0),
-              data=ana2)
-
-summary(vload.model3)
-tidy(vload.model3, conf.int = TRUE, exponentiate = FALSE) %>% 
-  mutate(
-    estimate = round(estimate, 3),
-    std.error = round(std.error, 3),
-    statistic = round(statistic, 3),
-    p.value = round(p.value, 3),
-    conf.low = round(conf.low, 3),
-    conf.high = round(conf.high, 3),
-    vload_copies_ml = round(10^estimate, 3),
-    vload_ml_LL = round(10^conf.low, 3),
-    vload_ml_UL = round(10^conf.high, 3))
-```
-
 Look at multicollinearity issues if present
 ```{r}
-car::vif(vload.model3)
+car::vif(vload.model2)
 ```
-
 
 * hard drug use completely changes direction when including comorbidites. It now has an
-estimated 12.2% higher viral load as compared to non-drug users
+estimated 122.3% higher viral load as compared to non-drug users
 
-Compare natural log and log10 transformations. log10 is standard use in prior literature in
-HIV studies
-```{r}
-hist(log10(ana$vload0))
-hist(log(ana$vload0))
+Bayesian (N=464)
+
+```{r label = "Bayes model"}
+vload.brm <- brm(
+  log_vload2 ~ hard0 + log_vload0 + age0 + bmi0 + smoke0 + educ0 + race0,
+  data = ana2_cc,
+  family = gaussian(),
+  prior = c(
+    # slope of 1 on log10 is 10-fold difference in viral load (weakly informative)
+    prior(normal(0, 1), class = "b"), 
+    prior(normal(0, 5), class = "Intercept"),  # less interpretable so make var wider
+    prior(student_t(3, 0, 2.5), class = "sigma")), # residual SD (half-t)
+  chains = 4, cores = 6, iter = 4000)
+
+summary(vload.brm)
+
 ```
 
-Build CD4 outcome model (frequentist). Did not transform as residuals looked good with
-raw values.
+```{r}
+vload_post1 <- posterior_summary(vload.brm) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "parameter")
+
+vload_post1
+
+vload_post2 <- describe_posterior(vload.brm, ci_method = "HDI", effects = "all")
+vload_post2
+
+vload_draws <- posterior::as_draws_df(vload.brm)
+vload_beta  <- vload_draws$b_hard0Yes
+
+# Directional evidence (hard drug users have higher log10 viral load)
+mean(vload_beta > 0)
+
+## limited evidence from labs in vitro and animal studies show hard drugs inhibits 
+## immune response and increases HIV replication. PIs believe TRT should lower viral load
+## and increase CD4 counts
+
+# alternative for viral load
+mean(vload_beta < 0)
+
+# 95% credible interval
+quantile(vload_beta, c(0.025, 0.975))
+```
+* The posterior mean difference in Year-2 log10 viral load for hard drug users vs non-users was -0.009 (95% CrI: -0.41, 0.39), with posterior probability $P(\beta>0)=0.97$
+
+
+### CD4 outcome model (N=464):
+* Did not transform as residuals looked good with raw values.
 ```{r}
 options(scipen = 999)
 
 cd4.model <- lm(cd42 ~ factor(hard0) + cd40 + age0 + bmi0 + factor(smoke0) + 
                        factor(educ0) + factor(race0),
-              data=ana2)
+              data=ana2_cc)
 
 summary(cd4.model)
+nobs(cd4.model)
 
 tidy(cd4.model, conf.int = TRUE, exponentiate = FALSE) %>% 
   mutate(
@@ -590,7 +766,10 @@ tidy(cd4.model, conf.int = TRUE, exponentiate = FALSE) %>%
     conf.high = round(conf.high, 3))
 ```
 
-Indentify why I'm getting contrast error
+After adjusting for baseline baseline CD4+ T cell counts, age, BMI, smoking, education, and race, baseline hard-drug users had an estimated lower CD4 count of approximately 172.2 at Year 2 compared with non-users [95% CI: (-235 to -109.4); p<0.001].
+
+
+Identify why I'm getting contrast error
 ```{r}
 table(ana2$hard0, useNA = "ifany")
 table(ana2$smoke0, useNA = "ifany")
@@ -598,8 +777,6 @@ table(ana2$educ0, useNA = "ifany")
 table(ana2$race0, useNA = "ifany")
 ```
 
-
-After adjusting for baseline CD4+ T cell counts age, BMI, smoking, education, and race, baseline hard-drug users had an estimated 42.9% lower viral load at Year 2 compared with non-users (1-0.571), but this difference did not reach significance (p = 0.232).
 
 Look at distribution of CD4 T cell count, log counts, and boxplots between drug user group
 ```{r}
@@ -673,33 +850,6 @@ tidy(physical.model, conf.int = TRUE, exponentiate = FALSE) %>%
 
 ## Mediation Analysis
 
-Adherence variable is ordinal in nature and values are not evenly spaced. Therefore,
-we can't use a linear approach. Let's try converting to a binary and see results
-
-```{r}
-ana2 <- ana2 %>%
-  mutate(
-    adh_bin = case_when(
-      adh2 %in% c("100%","95-99%") ~ 1,  # ≥95%
-      adh2 %in% c("75-94%", "<75%") ~ 0,  # <95%
-      TRUE ~ NA_real_),
-    adh_bin = factor(adh_bin, levels = c(0,1),
-                     labels = c("<95%", "≥95%")))
-```
-
-We also need a complete case analysis or we will keep getting "number of observations do not match between mediator and outcome models" error
-
-```{r}
-# complete case analysis
-ana2_cc <- ana2 %>%
-  select(cd42, hard0, adh_bin, cd40,
-         age0, bmi0, smoke0, educ0, race0) %>%
-  na.omit() %>%
-  droplevels()
-```
-
-
-
 Custom function for calculating mediation coefficients
 ```{r}
 # boot_fun <- function(data, idx) {
@@ -734,6 +884,8 @@ mod2_adjusted <- lm(cd42 ~ hard0 + adh_bin, data=ana2_cc) # Y~ X+M
 mod2_covariate <- glm(adh_bin ~ hard0, 
                      family = binomial,
                      data=ana2_cc) # M~X
+
+summary(mod2_covariate)
 
 # Extract coefficients
 coef(mod2_crude)
@@ -775,13 +927,9 @@ summary(med_vl)
 
 ```
 
-```{r}
-table(ana2_cc$race0)
-table(ana2_cc$adh_bin)
-```
-```{r}
-library(brms)
 
+Bayesian mediation
+```{r}
 # Mediator model
 med_model <- bf(adh_bin ~ hard0 + cd40 + age0 + bmi0 + smoke0 + educ0 + race0,
                 family = bernoulli(link = "logit"))
@@ -926,60 +1074,60 @@ Proportion Mediated
 mean(NIE / TE) = 6/168 ≈ 3.6%
 
 
-## Dropout Rates
+## Dropout Rate Analysis
 
 ```{r}
-ana2$complete_cd4 <- ifelse(!is.na(ana2$cd42), 1, 0)
+ana2_dr <- ana2 %>% 
+  select(log_vload2, log_vload0, cd42, cd40, hard0, adh2, physical0, physical2,
+         mental0, mental2, age0, bmi0, smoke0, educ0, race0) %>% 
+  mutate(complete_obs = if_all(everything(), ~ !is.na(.)))
 
-table(ana2$complete_cd4, ana2$hard0)
-t.test(cd40 ~ complete_cd4, data = ana2)
+table(ana2_dr$complete_obs, ana2_dr$hard0)
+t.test(cd40 ~ complete_obs, data = ana2_dr)
+
 ```
 
+
+Generate a table that shows complete case analysis vs using all 715 observations
+* in other words 464 vs 715
+* since we are using complete case to be consistent across all analyses - I am comparing complete cases of 464 vs using all 715 subjects who has baseline or year 2. I reason this is the best approach??
 ```{r}
-ana2_drop <- ana2 %>%
+ana2_drop <- ana2_dr %>%
   mutate(
     hard0 = factor(hard0, levels = c("No", "Yes"), exclude = NULL),
     followup_status = factor(
-      if_else(complete == 1, "Complete (baseline + Year 2) CD4", "Missing Year 2 CD4"),
-      levels = c("Complete (baseline + Year 2)", "Missing Year 2")))
+      if_else(complete_obs == T, "Complete", "Missing"),
+      levels = c("Complete", "Missing")))
 
 tbl_dropout <- ana2_drop %>%
   tbl_summary(
     by = followup_status,
-    include = c(
-      hard0, age0, bmi0, smoke0, educ0, race0,
-      log_vload0, cd40, physical0, mental0, cesd0),
+    include = c(log_vload0, cd40, physical0, mental0),
     type = list(
-      hard0 ~ "categorical",
     all_continuous() ~ "continuous2"),
     statistic = list(
       all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),
       all_categorical() ~ "{n} ({p}%)"),
     digits = all_continuous() ~ 1,
     missing = "ifany",
-    missing_text = "NA",
+    missing_text = "Missing Both Measurements",
     missing_stat = "{N_miss} ({p_miss}%)",
     label = list(
-      hard0 ~ "Baseline hard drug use",
-      age0 ~ "Age",
-      bmi0 ~ "BMI",
-      smoke0 ~ "Smoking status",
-      educ0 ~ "Education",
-      race0 ~ "Race/ethnicity",
       log_vload0 ~ "Baseline viral load (log10 copies/mL)",
       cd40 ~ "Baseline CD4 T-cell Count",
       physical0 ~ "Baseline physical QOL",
-      mental0 ~ "Baseline mental QOL",
-      cesd0 ~ "Baseline CESD score")) %>%
+      mental0 ~ "Baseline mental QOL")) %>%
   add_p(pvalue_fun = ~style_pvalue(.x, digits = 3)) %>%
-  add_n() %>% 
+  add_n() %>%
   add_overall() %>%
-  bold_labels() %>% 
-  as_gt() %>%
-    modify_footnote_header(
-    footnote = "Follow-up status defined based on availability of Year 2 CD4 measurement.",
+  bold_labels() %>%
+    modify_spanning_header(
+    c("stat_1", "stat_2") ~ "**Cases**") %>%
+  modify_footnote_header(
     columns = all_stat_cols(),
-    replace = FALSE)
+    footnote = "Follow-up status defined based on availability of Year 2 outcome.",
+    replace = F) %>%
+  as_gt() %>%
   tab_options(
     table.font.size = "small",
     heading.align = "left",
@@ -990,11 +1138,114 @@ tbl_dropout <- ana2_drop %>%
 tbl_dropout
 ```
 
-Missing data under ana2 format where each row is one subject showing baseline and year 2
+
+Function to create a table for each outcome to compare summary statistics at baseline to determine if dropout may bias results. - **Needs work**
+
+```{r label="dropout table function"}
+make_dropout_tbl <- function(data, var, label_text) {
+  stopifnot(is.data.frame(data))
+  stopifnot(is.character(var), length(var) == 1)
+  stopifnot(is.character(label_text), length(label_text) == 1)
+
+  # header counts + %
+  hdr_df <- data %>%
+    dplyr::count(followup_status, name = "n") %>%
+    dplyr::mutate(
+      pct = n / sum(n),
+      hdr = paste0(
+        "**", followup_status, "**<br>N = ", n,
+        " (", scales::percent(pct, accuracy = 0.1), ")"))
+
+  hdr_list <- setNames(as.list(hdr_df$hdr), paste0("stat_", seq_len(nrow(hdr_df))))
+
+  # label as a formula: var ~ "Label"
+  lab_fml <- rlang::new_formula(rlang::sym(var), label_text)
+
+  data %>%
+    gtsummary::tbl_summary(
+      by = followup_status,
+      include = dplyr::all_of(var),
+      type = list(gtsummary::all_continuous() ~ "continuous2"),
+      statistic = list(
+        gtsummary::all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})")
+      ),
+      digits = gtsummary::all_continuous() ~ 1,
+      missing = "ifany",
+      missing_text = "Missing Both Measurements",
+      missing_stat = "{N_miss} ({p_miss}%)",
+      label = lab_fml
+    ) %>%
+    gtsummary::add_p(pvalue_fun = ~gtsummary::style_pvalue(.x, digits = 3)) %>%
+    gtsummary::add_n() %>%
+    gtsummary::add_overall() %>%
+    gtsummary::bold_labels() %>%
+    gtsummary::modify_spanning_header(c("stat_1", "stat_2") ~ "**Cases**") %>%
+    gtsummary::modify_header(!!!hdr_list) %>% 
+    as_gt() %>%
+    tab_options(
+      table.font.size = "small",
+      heading.align = "left",
+      data_row.padding = px(3),
+      table.border.top.width = px(2),
+      table.border.bottom.width = px(2))
+}
+```
+
+Test function
+```{r}
+vars <- list(
+  log_vload0 = "Baseline viral load (log10 copies/mL)",
+  cd40 = "Baseline CD4 T-cell Count",
+  physical0 = "Baseline physical QOL",
+  mental0 = "Baseline mental QOL")
+
+
+tables <- purrr::imap(vars, ~ make_dropout_tbl(ana2_drop, var = .y, label_text = .x))
+tables$log_vload0
+```
+
+
+Confirmation check that gtsummary() is calculating numbers correctly
+```{r}
+pairs <- tribble(
+  ~outcome, ~base, ~yr2,
+  "viral load", "log_vload0", "log_vload2",
+  "CD4", "cd40", "cd42",
+  "physical QOL", "physical0", "physical2",
+  "mental QOL", "mental0", "mental2")
+
+miss_tbl <- pairs %>%
+  rowwise() %>%
+  mutate(
+    miss0_have2 = sum(is.na(ana2[[base]]) & !is.na(ana2[[yr2]])),
+    have0_miss2 = sum(!is.na(ana2[[base]]) & is.na(ana2[[yr2]])),
+    both = sum(!is.na(ana2[[base]]) & !is.na(ana2[[yr2]])),
+    none = sum(is.na(ana2[[base]]) & is.na(ana2[[yr2]])),
+    perc_miss = 1-both/715) %>%
+  ungroup()
+
+miss_tbl
+```
+
+Using nanier package to calculate missing based ana dataset where each row is one subject
 ```{r}
 ana2_drop %>%
   ungroup() %>% 
   miss_var_summary()
 ```
+
+### Logistic Dropout Modelling
+```{r}
+dropout.model <- glm(
+  followup_status ~ age0 + bmi0 + race0 + smoke0 + educ0 +
+            log_vload0 + cd40 + physical0 + mental0 + hard0,
+  family = binomial,
+  data = ana2_drop)
+summary(dropout.model)
+broom::tidy(dropout.model, exponentiate = TRUE, conf.int = TRUE)
+```
+* about 3.8% (1-0.962) lower odds of dropout per unit increase in physical QOL
+* about 2.5% (1-0.975) lower odds of dropout per unit increase in age
+
 
 
