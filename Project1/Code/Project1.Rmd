@@ -54,6 +54,9 @@ library(posterior)
 library(brms)
 library(bayestestR)
 library(purrr)
+
+# load scripts
+source("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/Code/group_counts_ftn.R")
 ```
 
 ## Read in the csv
@@ -186,6 +189,16 @@ ana2 <- ana %>%
       race0 %in% c("White Hisp", "Black Hisp", "Other Hisp", "Other") ~ "Hispanic",
       TRUE ~ race0) %>% 
       factor(),
+    smoke0 = ifelse(smoke0=="Never", "Former", smoke0) %>% factor(),
+    # convert adherence into a binary indicator
+      adh_bin = case_when(
+      adh2 %in% c("100%","95-99%") ~ 1,  # ≥95%
+      adh2 %in% c("75-94%", "<75%") ~ 0,  # <95%
+      TRUE ~ NA_real_),
+    adh_bin = factor(adh_bin, levels = c(0,1),
+                     labels = c("<95%", "≥95%")),
+    # insufficient data and implausible values for some BMIs
+    bmi0 = ifelse(bmi0 %in% c(-1, 999), NA, bmi0),
     cesd0 = ifelse(cesd0==-1, NA_character_, cesd0),
     cesd0 = as.numeric(cesd0))
 ```
@@ -243,51 +256,9 @@ Clinically meaning changes
 ***collapse smoker category***
 ***Descriptive for adherence and fit hard drug and hard drug + ADH***
 
-```{r label="function for calculating obs per grouping variable"}
-count_grp_obs <- function(data, vars, include_na = TRUE, id = NULL) {
-  stopifnot(is.data.frame(data))
-
-  dat <- dplyr::as_tibble(data) %>%
-    dplyr::select(dplyr::all_of(vars))
-
-  dat_long <- dat %>%
-    tidyr::pivot_longer(
-      cols = everything(),
-      names_to = "variable",
-      values_to = "category") %>%
-    dplyr::mutate(
-      category = dplyr::if_else(is.na(category), 
-                                "Missing", 
-                                as.character(category)))
-
-  if (!include_na) dat_long <- dplyr::filter(dat_long, category != "Missing")
-
-  if (is.null(id)) {
-    dat_long %>%
-      dplyr::count(variable, category, name = "n") %>%
-      dplyr::group_by(variable) %>%
-      dplyr::mutate(pct = n / sum(n)) %>%
-      dplyr::ungroup()
-  } else {
-    data %>%
-      dplyr::select({{ id }}, dplyr::all_of(vars)) %>%
-      tidyr::pivot_longer(-{{ id }}, 
-                          names_to = "variable", 
-                          values_to = "category") %>%
-      dplyr::mutate(
-        category = dplyr::if_else(is.na(category), 
-                                  "Missing", 
-                                  as.character(category))) %>%
-      dplyr::distinct({{ id }}, variable, category) %>%
-      dplyr::count(variable, category, name = "n_subjects") %>%
-      dplyr::group_by(variable) %>%
-      dplyr::mutate(pct_subjects = n_subjects / sum(n_subjects)) %>%
-      dplyr::ungroup()
-  }}
-```
-
 Test function
 ```{r}
+# load from starting R code chunk
 count_grp_obs(ana, vars = c("hard0", "smoke0"), mode = "interaction")
 ```
 
@@ -447,7 +418,7 @@ ggplot(long_outcomes, aes(x = years_f, y = value, fill = hard_drugs)) +
 
 
 
-### table1 Demographics
+### Table1 Demographics
 
 ```{r}
 tbl1 <- ana2_cc %>%
@@ -597,7 +568,7 @@ outcomes <- list(
 
 ```{r label="Function to perform all primary models at once"}
 fit_models <- function(outcome, baseline, data) {
-  # model form
+  # model form - consisitent across all models
   formula <- as.formula(
     paste(outcome, "~ hard0 +", baseline,
           "+ age0 + bmi0 + smoke0 + educ0 + race0"))
@@ -611,10 +582,10 @@ fit_models <- function(outcome, baseline, data) {
     data = data,
     family = gaussian(),
     prior = c(
-      # slope of 1 on log10 is 10-fold difference in viral load (weakly informative)
+      # ***the priors need to be more uniform or more robust to different models**
       prior(normal(0, 1), class = "b"),
-      prior(normal(0, 5), class = "Intercept"), # less interpretable so make var wider
-      prior(student_t(3, 0, 2.5), class = "sigma")), # half-t - standard
+      prior(normal(0, 1000), class = "Intercept"), # less interpretable so make var wider
+      prior(student_t(3, 0, 500), class = "sigma")), # half-t - standard
     chains = 4, cores = 6, iter = 2000,
     refresh = 0)
   
@@ -625,7 +596,65 @@ fit_models <- function(outcome, baseline, data) {
 
 Run all models at once
 ```{r}
+t0 <- Sys.time()
+options(warn = -1) # GenomicAlignments/SummarizedExperiment warnings
 model.fits <- imap(outcomes, ~ fit_models(.x$y, .x$baseline, ana2_cc))
+options(warn = 0)
+t1 <- Sys.time()
+message("Runtime: ", 
+        round(as.numeric(difftime(t1, t0, units = "mins")), 2), 
+        " minutes")
+```
+
+```{r}
+summary(model.fits$vload$lm)
+summary(model.fits$vload$brm)
+model.fits$cd4$lm
+model.fits$cd4$brm
+model.fits$phys$lm
+model.fits$phys$brm
+model.fits$ment$brm
+```
+
+Extract key effects for table output function
+```{r label="Function for extracting key elements from models"}
+extract_effects <- function(lm_fit, brm_fit, outcome_name) {
+
+  # Frequentist
+  freq <- broom::tidy(lm_fit, conf.int = TRUE) %>%
+    filter(term == "hard0Yes") %>%
+    transmute(
+      outcome = outcome_name,
+      freq_est = estimate,
+      freq_lo = conf.low,
+      freq_hi = conf.high,
+      freq_p = p.value)
+
+  # Bayesian
+  draws <- posterior::as_draws_df(brm_fit)
+  beta <- draws$b_hard0Yes
+
+  bay <- tibble(
+    outcome = outcome_name,
+    bay_est = mean(beta),
+    bay_lo = quantile(beta, 0.025),
+    bay_hi = quantile(beta, 0.975))
+
+  # combine tables created above
+  left_join(freq, bay, by = "outcome")
+}
+```
+
+Comparison table
+```{r}
+results <- imap_dfr(model.fits, ~ extract_effects(.x$lm, .x$brm, .y))
+
+results
+```
+
+```{r}
+nobs(model.fits$cd4$lm)
+nrow(model.frame(model.fits$cd4$brm))  # or nrow(model.frame(cd4_brm))
 ```
 
 
@@ -767,6 +796,22 @@ tidy(cd4.model, conf.int = TRUE, exponentiate = FALSE) %>%
 ```
 
 After adjusting for baseline baseline CD4+ T cell counts, age, BMI, smoking, education, and race, baseline hard-drug users had an estimated lower CD4 count of approximately 172.2 at Year 2 compared with non-users [95% CI: (-235 to -109.4); p<0.001].
+
+```{r}
+cd4.brm <- brm(
+  cd42 ~ hard0 + log_vload0 + age0 + bmi0 + smoke0 + educ0 + race0,
+  data = ana2_cc,
+  family = gaussian(),
+  prior = c(
+    # slope of 1 on log10 is 10-fold difference in viral load (weakly informative)
+    prior(normal(0, 1), class = "b"), 
+    prior(normal(0, 5), class = "Intercept"),  # less interpretable so make var wider
+    prior(student_t(3, 0, 2.5), class = "sigma")), # residual SD (half-t)
+  chains = 4, cores = 6, iter = 4000)
+
+summary(cd4.brm)
+```
+
 
 
 Identify why I'm getting contrast error
