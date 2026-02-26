@@ -54,6 +54,8 @@ library(posterior)
 library(brms)
 library(bayestestR)
 library(purrr)
+library(loo)
+library(report)
 
 # load scripts
 source("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/Code/group_counts_ftn.R")
@@ -68,7 +70,8 @@ HIV_raw <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataRaw/
 
 ## Data Management & Cleanup
 
-Convert specific variables to factors
+Convert specific variables to factors and make non-drug users the reference
+group for variable of interest
 ```{r}
 var_fct <- c("newid", "SMOKE", "RACE", "EDUCBAS", "hard_drugs")
 
@@ -84,6 +87,7 @@ HIV_raw <- HIV_raw %>%
                      labels = c("<=8th grade", "9,10,11th grade", "12th grade",
                              ">=1yr college", "4yr college degree", "Some grad", 
                              "Post-grad degree")),
+    # non-users will be the reference for modelling
     hard_drugs = factor(hard_drugs, levels = c(0,1),
                         labels = c("No", "Yes")),
     ADH = factor(ADH, 
@@ -201,25 +205,6 @@ ana2 <- ana %>%
     bmi0 = ifelse(bmi0 %in% c(-1, 999), NA, bmi0),
     cesd0 = ifelse(cesd0==-1, NA_character_, cesd0),
     cesd0 = as.numeric(cesd0))
-```
-
-
-Convert adherence into a binary indicator
-```{r}
-ana2 <- ana2 %>%
-  mutate(
-    adh_bin = case_when(
-      adh2 %in% c("100%","95-99%") ~ 1,  # ≥95%
-      adh2 %in% c("75-94%", "<75%") ~ 0,  # <95%
-      TRUE ~ NA_real_),
-    adh_bin = factor(adh_bin, levels = c(0,1),
-                     labels = c("<95%", "≥95%")))
-```
-
-Insufficient data and implausible values were noted for some BMI values
-```{r}
-ana2 <- ana2 %>%
-  mutate(bmi0 = ifelse(bmi0 %in% c(-1, 999), NA, bmi0))
 ```
 
 
@@ -542,7 +527,6 @@ tbl2 <- ana2 %>%
 tbl2
 ```
 
-
 * Rates of liver and kidney disease are higher in drug users (3.2% vs 9.7% and 16% vs 34%, respectively). No difference in diabetes and higher blood pressure is more prevalent in
 the non-drug use group (27% vs 15%). Also, there is pretty substantial missing values
 for the kidney (71%), diabetes (57%), and liver (34%) groups. 
@@ -568,57 +552,109 @@ outcomes <- list(
 
 ```{r label="Function to perform all primary models at once"}
 fit_models <- function(outcome, baseline, data) {
-  # model form - consisitent across all models
-  formula <- as.formula(
+  # model form - consistent across all models
+  full <- as.formula(
     paste(outcome, "~ hard0 +", baseline,
+          "+ age0 + bmi0 + smoke0 + educ0 + race0"))
+  # with hard drug coeffecient removed
+  reduced <-  as.formula(
+    paste(outcome, "~", baseline,
           "+ age0 + bmi0 + smoke0 + educ0 + race0"))
   
   # Frequentist model
-  lm_fit <- lm(formula, data = data)
+  lm_fit <- lm(full, data = data)
   
   # Bayes model
+  options(warn = -1)
   brm_fit <- brm(
-    formula,
+    full,
     data = data,
     family = gaussian(),
     prior = c(
       # ***the priors need to be more uniform or more robust to different models**
-      prior(normal(0, 1), class = "b"),
-      prior(normal(0, 1000), class = "Intercept"), # less interpretable so make var wider
-      prior(student_t(3, 0, 500), class = "sigma")), # half-t - standard
+      prior(normal(0, 10000), class = "Intercept"), # less interpretable so make var wider
+      prior(normal(0, 10000), class = "b"),
+      prior(student_t(3, 0, 100^2), class = "sigma")), # half-t - standard
     chains = 4, cores = 6, iter = 2000,
     refresh = 0)
   
-  # export model results into a list
-  list(lm = lm_fit, brm = brm_fit)
+  # WAIC
+  log_lik_fit <- log_lik(brm_fit)
+  
+  # Bayes reduced model for testing hard drugs significance
+    brm_red <- brm(
+    reduced,
+    data = data,
+    family = gaussian(),
+    prior = c(
+      prior(normal(0, 10000), class = "Intercept"), 
+      prior(normal(0, 10000), class = "b"),
+      prior(student_t(3, 0, 1000), class = "sigma")), 
+    chains = 4, cores = 6, iter = 2000,
+    refresh = 0)
+    options(warn = 0)
+    
+    # WAIC
+    log_lik_red <- log_lik(brm_red)
+
+    # leave-one-out cross-validation for reduced model
+    loo_res <- suppressWarnings(brms::loo_compare(
+      brms::add_criterion(brm_fit, "loo"),
+      brms::add_criterion(brm_red, "loo"),
+      model_names = c("Full Model", "Reduced Model")))
+    
+    waic_fit <- waic(log_lik_fit)
+    waic_red <- waic(log_lik_red)
+    waic_diff <- loo_compare(waic_fit, waic_red)
+  
+  # store model results into a list
+  list(lm = lm_fit, brm = brm_fit, brm_red = brm_red,
+      loo_res=loo_res, ll_fit=log_lik_fit, ll_red=log_lik_red,
+       waic_fit=waic_fit, waic_red=waic_red, waic_diff=waic_diff)
 }
 ```
 
 Run all models at once
 ```{r}
 t0 <- Sys.time()
-options(warn = -1) # GenomicAlignments/SummarizedExperiment warnings
+
 model.fits <- imap(outcomes, ~ fit_models(.x$y, .x$baseline, ana2_cc))
-options(warn = 0)
+
 t1 <- Sys.time()
-message("Runtime: ", 
-        round(as.numeric(difftime(t1, t0, units = "mins")), 2), 
+message("Runtime: ",
+        round(as.numeric(difftime(t1, t0, units = "mins")), 2),
         " minutes")
 ```
 
+* Macbook Pro M1 (6-cores) Runtime: 5.58min
+
 ```{r}
-summary(model.fits$vload$lm)
-summary(model.fits$vload$brm)
+# extract info from function list using CD4 outcome as example
 model.fits$cd4$lm
 model.fits$cd4$brm
-model.fits$phys$lm
-model.fits$phys$brm
-model.fits$ment$brm
+model.fits$cd4$loo_res
+report(model.fits$cd4$loo_res)
+model.fits$cd4$waic_fit
+model.fits$cd4$waic_red
+model.fits$cd4$waic_diff
+
+# loo results
+elpd_diff <- model.fits$cd4$loo_res["Reduced Model", "elpd_diff"]
+se_diff <- model.fits$cd4$loo_res["Reduced Model", "se_diff"]
+
+# confirm report() function p-value (wald-normal approx)
+z_score <- abs(elpd_diff) / se_diff
+(p_value <- 2 * (1 - pnorm(z_score)))
+
+
+
 ```
+
+"The rule of thumb is that the models are "very similar" if |elpd_diff| (the absolute value of elpd_diff) is less than 4 (Sivula, Magnusson and Vehtari, 2020). If superior to 4, then one can use the SE to obtain a standardized difference (Z-diff) and interpret it as such, assuming that the difference is normally distributed. The corresponding p-value is then calculated as `2 * pnorm(-abs(Z-diff))`. However, note that if the raw ELPD difference is small (less than 4), it doesn't make much sense to rely on its standardized value: it is not very useful to conclude that a model is much better than another if both models make very similar predictions."
 
 Extract key effects for table output function
 ```{r label="Function for extracting key elements from models"}
-extract_effects <- function(lm_fit, brm_fit, outcome_name) {
+extract_effects <- function(lm_fit, brm_fit, outcome_name, waic_fit, waic_red) {
 
   # Frequentist
   freq <- broom::tidy(lm_fit, conf.int = TRUE) %>%
@@ -639,18 +675,146 @@ extract_effects <- function(lm_fit, brm_fit, outcome_name) {
     bay_est = mean(beta),
     bay_lo = quantile(beta, 0.025),
     bay_hi = quantile(beta, 0.975))
+    
+  # Extract WAIC values 
+  elpd_full <- waic_fit$estimates["elpd_waic", "Estimate"]
+  elpd_full_se <- waic_fit$estimates["elpd_waic", "SE"]
+  waic_full <- waic_fit$estimates["waic", "Estimate"]
+  waic_full_se <- waic_fit$estimates["waic", "SE"]
 
-  # combine tables created above
-  left_join(freq, bay, by = "outcome")
+  elpd_red  <- waic_red$estimates["elpd_waic", "Estimate"]
+  elpd_red_se <- waic_red$estimates["elpd_waic", "SE"]
+  waic_reduced<- waic_red$estimates["waic", "Estimate"]
+  waic_reduced_se <- waic_red$estimates["waic", "SE"]
+
+  waic_comp <- tibble::tibble(
+    outcome = outcome_name,
+    elpd_full = elpd_full,
+    elpd_full_se = elpd_full_se,
+    waic_full = waic_full,
+    waic_full_se = waic_full_se, 
+    
+    elpd_red = elpd_red,
+    elpd_red_se = elpd_red_se,
+    waic_reduced = waic_reduced,
+    waic_reduced_se = waic_reduced_se,
+    
+    elpd_diff = elpd_full - elpd_red,
+    waic_diff = waic_full - waic_reduced
+  )
+
+  # combine all tables
+  result <- freq %>%
+    dplyr::left_join(bay, by = "outcome") %>%
+    dplyr::left_join(waic_comp, by = "outcome")
+
 }
 ```
 
 Comparison table
 ```{r}
-results <- imap_dfr(model.fits, ~ extract_effects(.x$lm, .x$brm, .y))
+results <- imap_dfr(model.fits, ~ extract_effects(
+  lm_fit = .x$lm, 
+  brm_fit = .x$brm, 
+  outcome_name = .y, 
+  waic_fit = .x$waic_fit,
+  waic_red = .x$waic_red))
 
-results
+
+results %>% 
+  filter(outcome = vload)
 ```
+
+```{r}
+# add sample sizes from each model and back-transform log10
+results2 <- results %>%
+  mutate(
+    n_lm  = map_int(names(model.fits), 
+                    ~ nobs(model.fits[[.x]]$lm)),
+    n_brm = map_int(names(model.fits), 
+                    ~ nrow(model.frame(model.fits[[.x]]$brm))),
+    across(
+      c(freq_est, freq_lo, freq_hi, bay_est, bay_lo, bay_hi),
+      ~ if_else(outcome == "vload", 1-10^.x, .x)),
+    outcome = recode(outcome,
+                     cd4   = "CD4",
+                     vload = "Viral load (log10)",
+                     phys  = "Physical QOL",
+                     ment  = "Mental QOL"))
+```
+
+
+### Results Table
+
+```{r}
+tbl_compare <- results2 %>%
+  # combine LL and UL CIs
+  mutate(
+    freq_ci = sprintf("(%.2f, %.2f)", freq_lo, freq_hi),
+    bay_ci  = sprintf("(%.2f, %.2f)", bay_lo, bay_hi)) %>%
+  select(outcome, n_lm, n_brm,
+         freq_est, freq_ci, freq_p,
+         bay_est, bay_ci, waic_full, waic_reduced, waic_diff) %>%
+  
+  gt(rowname_col = "outcome") %>%
+  cols_label(
+    n_lm = "N",
+    n_brm = "N",
+    freq_est = "Estimate",
+    freq_ci = "95% CI",
+    freq_p   = "P-value",
+    bay_est  = "Mean",
+    bay_ci = "95% HDI",
+    waic_full = "WAIC Full",
+    waic_reduced = "WAIC Red",
+    waic_diff = "WAIC Diff"
+    ) %>%
+  # header for freq
+  tab_spanner(
+    label = "Frequentist",
+    columns = c(n_lm, freq_est, freq_ci, freq_p)) %>%
+  # header for Bayes
+  tab_spanner(
+    label = "Bayesian",
+    columns = c(n_brm, bay_est, bay_ci, waic_full,waic_reduced,waic_diff)) %>%
+  # format numbers 
+  fmt_number(columns = c(freq_est, freq_ci, bay_est, bay_ci), decimals = 2) %>%
+  fmt_number(columns = c(waic_full, waic_reduced, waic_diff), decimals = 1,
+             use_seps = F) %>%
+  fmt_number(columns = freq_p, decimals = 3) %>%
+  
+  # change p-value reporting style
+  text_transform(
+    locations = cells_body(columns = freq_p),
+    fn = function(x) ifelse(as.numeric(x) < 0.001, "<0.001",
+                            format(round(as.numeric(x), 3), nsmall = 3))) %>% 
+  # bold specific text
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_stub(rows = everything())) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_spanners(
+      spanners = c("Frequentist", "Bayesian"))) %>% 
+  # center column labels
+  tab_style(
+  style = cell_text(align = "center"),
+  locations = cells_column_labels(everything())) %>% 
+  # size of font
+  tab_options(
+    table.font.size = "small") %>% 
+  # add a footnotes
+  tab_footnote(
+    footnote = "Frequentist intervals are 95% confidence intervals; Bayesian intervals are 95% credible intervals.",
+    locations = cells_column_labels(columns = c(freq_ci, bay_ci))) %>% 
+  tab_footnote(
+    footnote = "For WAIC, lower values indicate better model fit.",
+    locations = cells_column_labels(columns = c(waic_full, waic_reduced, waic_diff)))
+
+tbl_compare
+```
+
+After adjusting for baseline viral load and covariates, hard-drug users have about 0.37× the viral load of non-users at Year 2 (≈63% lower).
 
 ```{r}
 nobs(model.fits$cd4$lm)
