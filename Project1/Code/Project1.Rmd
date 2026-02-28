@@ -3,8 +3,9 @@ title: 'BIOS 6624 : Project 1'
 author: "Ryan Summers"
 date: "2026-02-04"
 output:
-  word_document: default
   html_document: default
+  word_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -56,6 +57,7 @@ library(bayestestR)
 library(purrr)
 library(loo)
 library(report)
+library(bayestestR)
 
 # load scripts
 source("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/Code/group_counts_ftn.R")
@@ -193,7 +195,11 @@ ana2 <- ana %>%
       race0 %in% c("White Hisp", "Black Hisp", "Other Hisp", "Other") ~ "Hispanic",
       TRUE ~ race0) %>% 
       factor(),
-    smoke0 = ifelse(smoke0=="Never", "Former", smoke0) %>% factor(),
+    smoke0 = case_when(
+      smoke0 %in% c("Never", "Former") ~ "Former",
+      smoke0 %in% c("Current") ~ "Current",
+      TRUE ~ NA_character_) %>% 
+      factor(levels = c("Former", "Current")),
     # convert adherence into a binary indicator
       adh_bin = case_when(
       adh2 %in% c("100%","95-99%") ~ 1,  # ≥95%
@@ -202,7 +208,7 @@ ana2 <- ana %>%
     adh_bin = factor(adh_bin, levels = c(0,1),
                      labels = c("<95%", "≥95%")),
     # insufficient data and implausible values for some BMIs
-    bmi0 = ifelse(bmi0 %in% c(-1, 999), NA, bmi0),
+    bmi0 = ifelse(bmi0 %in% c(-1, 999) | bmi0>100, NA, bmi0),
     cesd0 = ifelse(cesd0==-1, NA_character_, cesd0),
     cesd0 = as.numeric(cesd0))
 ```
@@ -211,7 +217,7 @@ ana2 <- ana %>%
 We also need a complete case analysis or we will keep getting "number of observations do not match between mediator and outcome models" error. Also, to be consistent across analyses its probably best we keep the same number of subjects across all models.
 
 **This will be the finalized dataset used for all analyses**
-* 464 subjects with complete cases for baseline and year 2 measurements
+* 463 subjects with complete cases for baseline and year 2 measurements
 ```{r}
 # complete case analysis
 ana2_cc <- ana2 %>%
@@ -219,6 +225,7 @@ ana2_cc <- ana2 %>%
          mental0, mental2, age0, bmi0, smoke0, educ0, race0, adh_bin) %>%
   na.omit() %>%
   droplevels()
+
 ```
 
 ## Exploratory Data Analysis (EDA)
@@ -229,16 +236,10 @@ Clinically meaning changes
 * 2pts on QOL
 * 50 CD4
 
-***Remove BMI values that are negative 1 and extreme***
 ***Explain why we choose a specific modeling strategy in Methods***
 ***If you remove observations, state if they were removed from all analyses***
-***Keep track of sample sizes for each model ran***
-***Show table1 with all subjects that will be used in analyses***
 ***Don't show regression coefficients - be more informative to a non-stats person***
 ***Label the plots in code that are used in final report***
-***Add frequentist and Bayesian results in one table***
-***reference worksheet 5 for method section write-up***
-***collapse smoker category***
 ***Descriptive for adherence and fit hard drug and hard drug + ADH***
 
 Test function
@@ -331,24 +332,35 @@ We are not interpreting or estimating race effects, so we should be good to coll
 Potential explanation in final report:
 Self-reported race/ethnicity was included as a covariate to account for potential confounding by social determinants of health and healthcare access disparities. Race/ethnicity categories were collected as [describe original categories]. For analyses with limited statistical power due to sample size, we combined categories as follows: [describe any collapsing]. We acknowledge that race is a social construct and that observed differences likely reflect structural inequities rather than biological differences.
 
-Look at distributions of outcomes
 
+Look at distribution of CD4 T cell count, log counts, and boxplots between drug user group
 ```{r}
-hist(HIV_raw$VLOAD)
+hist(ana2$physical0)
+summary(ana2$physical0)
+hist(ana2$mental0)
+summary(ana2$mental0)
+
+# check distribution of QOL measures to identify odd values
+hist(ana2$cd40)
+hist(ana2$log_cd40)
+boxplot(ana2$log_cd40~ana2$hard0)
+boxplot(ana2$cd40~ana2$hard0)
+
 ```
 
 ```{r}
 # number missing for hard drug group
-HIV_raw %>% 
-  group_by(hard_drugs) %>% 
+ana2 %>% 
+  group_by(hard0) %>% 
   summarize(n = n())
 ```
 
-Spaghetti plots
+### Visualizations
+
 ```{r}
 # convert to long format
 long_outcomes <- HIV_raw %>%
-  filter(years %in% c(0,1,2) & !is.na(hard_drugs)) %>%
+  filter(years %in% c(0,2) & !is.na(hard_drugs)) %>%
   mutate(log_vload = log10(VLOAD)) %>% 
            
   pivot_longer(cols = c(log_vload, LEU3N, AGG_PHYS, AGG_MENT),
@@ -362,7 +374,10 @@ long_outcomes <- HIV_raw %>%
                        AGG_PHYS = "Physical QOL (0 to 100)",
                        AGG_MENT = "Mental QOL (0 to 100)"),
       years_f = factor(years, levels = c(0, 1, 2), labels = c("0", "1", "2")))
+```
 
+Trajectories
+```{r}
 ggplot(long_outcomes, aes(years, value, group = newid, color = hard_drugs)) +
   geom_line(alpha = 0.05) +
   stat_summary(aes(group = hard_drugs), fun = mean, 
@@ -378,29 +393,26 @@ ggplot(long_outcomes, aes(years, value, group = newid, color = hard_drugs)) +
 
 ```
 
-```{r}
+Boxplot 
+```{r label = "Boxplot used in final report (Figure 1)"}
 ggplot(long_outcomes, aes(x = years_f, y = value, fill = hard_drugs)) +
   geom_boxplot(outlier.shape = NA, width = 0.7, position = position_dodge(width = 0.75)) +
   geom_point(
     aes(color = hard_drugs),
     position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.75),
-    alpha = 0.08, size = 0.6
-  ) +
+    alpha = 0.08, size = 0.6) +
   facet_wrap(~ outcome, scales = "free_y") +
   scale_fill_manual(values = c("steelblue", "firebrick")) +
   scale_color_manual(values = c("steelblue", "firebrick")) +
   labs(
-    title = "Treatment Response Distributions by Year and Baseline Hard Drug Use",
+    title = "Treatment Response Distributions by Baseline & Year 2 Hard Drug Use",
     x = "Year since HAART initiation",
     y = NULL,
     fill = "Hard Drugs",
-    color = "Hard Drugs"
-  ) +
+    color = "Hard Drugs") +
   theme_bw() +
   theme(legend.position = "bottom")
 ```
-
-
 
 
 ### Table1 Demographics
@@ -445,7 +457,7 @@ tbl1 <- ana2_cc %>%
   modify_spanning_header(
     c("stat_1", "stat_2") ~ "**Hard Druge Use**") %>%
   modify_footnote_header(
-    footnote = "Table includes all subjects from cohort at baseline (years=0)",
+    footnote = "Table includes only subjects that have both baseline and year 2 measurements",
     columns = all_stat_cols(),
     replace = FALSE) %>% 
   
@@ -533,12 +545,14 @@ for the kidney (71%), diabetes (57%), and liver (34%) groups.
 
 
 ## Primary Analysis
+
 * How treatment response differs between hard drug users and non-users
 
 * Collider bias? - do these comorbidities occur after exposure and outcome?
  - The exposure and outcome can both independently create a collider variable. In contrast to the case of confounding, where the confounder is associated with both the exposure and outcome, the collider is created by both the exposure and outcome.
  - Comorbidities can be downstream effects of higher viral load/cd4 and hard drug use,
  independently. Therefore, these comorbidities could very well be colliders
+  - ***Per Dr. Moore's comments on Data Analysis plan, we do not need to worry about these***  
  
 
 Streamline method utilizing functions to fit all models at once
@@ -551,7 +565,7 @@ outcomes <- list(
 ```
 
 ```{r label="Function to perform all primary models at once"}
-fit_models <- function(outcome, baseline, data) {
+fit_models <- function(outcome, baseline=NULL, data) {
   # model form - consistent across all models
   full <- as.formula(
     paste(outcome, "~ hard0 +", baseline,
@@ -615,7 +629,7 @@ fit_models <- function(outcome, baseline, data) {
 ```
 
 Run all models at once
-```{r}
+```{r, eval=F}
 t0 <- Sys.time()
 
 model.fits <- imap(outcomes, ~ fit_models(.x$y, .x$baseline, ana2_cc))
@@ -626,7 +640,23 @@ message("Runtime: ",
         " minutes")
 ```
 
-* Macbook Pro M1 (6-cores) Runtime: 5.58min
+* Macbook Pro M1 (6-cores) Runtime: ≈5.78min
+
+
+Save model using qs (serialization) for quicker knitting and loading between sessions
+```{r, eval=F}
+# save model results
+qsave(model.fits, "/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/model.fits.qs",
+      nthreads = 6)
+```
+
+
+```{r}
+# load model results
+model.fits <- qread("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/model.fits.qs",
+      nthreads = 6)
+```
+
 
 ```{r}
 # extract info from function list using CD4 outcome as example
@@ -646,35 +676,74 @@ se_diff <- model.fits$cd4$loo_res["Reduced Model", "se_diff"]
 z_score <- abs(elpd_diff) / se_diff
 (p_value <- 2 * (1 - pnorm(z_score)))
 
-
-
 ```
 
 "The rule of thumb is that the models are "very similar" if |elpd_diff| (the absolute value of elpd_diff) is less than 4 (Sivula, Magnusson and Vehtari, 2020). If superior to 4, then one can use the SE to obtain a standardized difference (Z-diff) and interpret it as such, assuming that the difference is normally distributed. The corresponding p-value is then calculated as `2 * pnorm(-abs(Z-diff))`. However, note that if the raw ELPD difference is small (less than 4), it doesn't make much sense to rely on its standardized value: it is not very useful to conclude that a model is much better than another if both models make very similar predictions."
 
-Extract key effects for table output function
+Extract key effects for table output function - must specify variable directly for now
 ```{r label="Function for extracting key elements from models"}
-extract_effects <- function(lm_fit, brm_fit, outcome_name, waic_fit, waic_red) {
-
+extract_effects <- function(lm_fit, lm_red, 
+                            brm_fit, brm_red, 
+                            outcome_name, 
+                            waic_fit=NULL, waic_red=NULL) 
+  {
   # Frequentist
-  freq <- broom::tidy(lm_fit, conf.int = TRUE) %>%
-    filter(term == "hard0Yes") %>%
+  freq_full <- broom::tidy(lm_fit, conf.int = TRUE) %>%
+    filter(term == "hard0Yes") %>% # needs to be more robust - revisit later
     transmute(
       outcome = outcome_name,
-      freq_est = estimate,
-      freq_lo = conf.low,
-      freq_hi = conf.high,
-      freq_p = p.value)
+      freq_full_est = estimate,
+      freq_full_lo = conf.low,
+      freq_full_hi = conf.high,
+      freq_full_p = p.value)
+  
+  freq_red <- broom::tidy(lm_red, conf.int = TRUE) %>%
+    filter(term == "hard0Yes") %>% # needs to be more robust - revisit later
+    transmute(
+      outcome = outcome_name,
+      freq_red_est = estimate,
+      freq_red_lo = conf.low,
+      freq_red_hi = conf.high,
+      freq_red_p = p.value)
 
   # Bayesian
-  draws <- posterior::as_draws_df(brm_fit)
-  beta <- draws$b_hard0Yes
+  draws_full <- posterior::as_draws_df(brm_fit)
+  beta_full <- draws_full$b_hard0Yes
+  # Get HDI values
+  hdi_full <- hdi(brm_fit, parameters = "b_hard0Yes") # needs to be more robust - revisit later
 
-  bay <- tibble(
+  # full Bayes model
+  bay_full <- tibble(
     outcome = outcome_name,
-    bay_est = mean(beta),
-    bay_lo = quantile(beta, 0.025),
-    bay_hi = quantile(beta, 0.975))
+    # median
+    bay_full_est_med = median(beta_full),
+    # mean
+    bay_full_est_mean = mean(beta_full),
+    # credible intervals
+    bay_full_CrI_lo = quantile(beta_full, 0.025),
+    bay_full_CrI_hi = quantile(beta_full, 0.975),
+    # HDIs
+    bay_full_HDI_lo = hdi_full$CI_low,
+    bay_full_HDI_hi = hdi_full$CI_high)
+
+  # reduced Bayes model
+  draws_red <- posterior::as_draws_df(brm_red)
+  beta_red <- draws_red$b_hard0Yes
+  # Get HDI values
+  hdi_red <- hdi(brm_red, parameters = "b_hard0Yes") 
+  
+  bay_red <- tibble(
+    outcome = outcome_name,
+    # median
+    bay_red_est_med = median(beta_red),
+    # mean
+    bay_red_est_mean = mean(beta_red),
+    # credible intervals
+    bay_red_CrI_lo = quantile(beta_red, 0.025),
+    bay_red_CrI_hi = quantile(beta_red, 0.975),
+    # HDIs
+    bay_red_HDI_lo = hdi_red$CI_low,
+    bay_red_HDI_hi = hdi_red$CI_high)
     
   # Extract WAIC values 
   elpd_full <- waic_fit$estimates["elpd_waic", "Estimate"]
@@ -700,14 +769,22 @@ extract_effects <- function(lm_fit, brm_fit, outcome_name, waic_fit, waic_red) {
     waic_reduced_se = waic_reduced_se,
     
     elpd_diff = elpd_full - elpd_red,
-    waic_diff = waic_full - waic_reduced
-  )
+    waic_diff = waic_full - waic_reduced)
 
+  # Create a list column with beta draws
+  beta_list_full <- list(beta_full)
+  beta_list_red <- list(beta_red)
+  
   # combine all tables
-  result <- freq %>%
-    dplyr::left_join(bay, by = "outcome") %>%
-    dplyr::left_join(waic_comp, by = "outcome")
-
+  result <- freq_full %>%
+    dplyr::left_join(freq_red, by = "outcome") %>%
+    dplyr::left_join(bay_full, by = "outcome") %>%
+    dplyr::left_join(bay_red, by = "outcome") %>%
+    dplyr::left_join(waic_comp, by = "outcome") %>%
+    dplyr::mutate(beta_draws_full = beta_list_full) %>%   # Add as list column
+    dplyr::mutate(beta_draws_red = beta_list_red)
+  
+  return(result)
 }
 ```
 
@@ -720,10 +797,40 @@ results <- imap_dfr(model.fits, ~ extract_effects(
   waic_fit = .x$waic_fit,
   waic_red = .x$waic_red))
 
-
-results %>% 
-  filter(outcome = vload)
 ```
+
+
+```{r}
+# extract draws if needed
+cd4_beta <- results$beta_draws[results$outcome == "cd4"][[1]]
+
+prob_either <- round(mean(abs(cd4_beta) > 50),3)
+
+# Display results
+cat("P(|CD4| > 50):", prob_either, "\n")
+
+vl_beta <- results$beta_draws[results$outcome == "vload"][[1]]
+prob_either <- round(mean(abs(vl_beta) > 0.5),3)
+
+# Display results
+cat("P(|VL| > 0.5):", prob_either, "\n")
+
+phys_beta <- results$beta_draws[results$outcome == "phys"][[1]]
+
+prob_either <- round(mean(abs(phys_beta) > 2),3)
+
+# Display results
+cat("P(|phys| > 2):", prob_either, "\n")
+
+ment_beta <- results$beta_draws[results$outcome == "ment"][[1]]
+
+prob_either <- round(mean(abs(ment_beta) > 2),3)
+
+# Display results
+cat("P(|ment| > 50):", prob_either, "\n")
+
+```
+
 
 ```{r}
 # add sample sizes from each model and back-transform log10
@@ -733,42 +840,53 @@ results2 <- results %>%
                     ~ nobs(model.fits[[.x]]$lm)),
     n_brm = map_int(names(model.fits), 
                     ~ nrow(model.frame(model.fits[[.x]]$brm))),
-    across(
-      c(freq_est, freq_lo, freq_hi, bay_est, bay_lo, bay_hi),
-      ~ if_else(outcome == "vload", 1-10^.x, .x)),
+    # # back-transform log10 viral load and make it more interpretable for PI
+    # across(
+    #   c(freq_est, freq_lo, freq_hi, bay_est_med, bay_HDI_lo, bay_HDI_hi),
+    #   ~ if_else(outcome == "vload", -(1-10^.x)*100, .x)),
     outcome = recode(outcome,
-                     cd4   = "CD4",
-                     vload = "Viral load (log10)",
-                     phys  = "Physical QOL",
-                     ment  = "Mental QOL"))
+                     #<b>CD4</b><br><span style='font-weight:normal'>Mean Cell Diff</span>
+                     cd4   = "CD4<br><span style='font-style:italic; 
+                     font-weight:normal'>Mean Diff (cells/mm³)</span>",
+                     
+                     vload = "log<sub>10</sub> VL<br><span style='font-style:italic;
+                     font-weight:normal'>Mean Diff (copies/mL)</span>",
+                     
+                     phys  = "Physical QOL<br><span style='font-style:italic;
+                     font-weight:normal'>Mean Diff (0-100 scale)</span>",
+                     
+                     ment  = "Mental QOL<br><span style='font-style:italic;
+                     font-weight:normal'>Mean Diff (0-100 scale)</span>"))
 ```
 
+* HDI (Highest Density Interval): Highlights the most credible values (highest probability density). If your posterior is skewed, an 89% or 95% HDI represents the shortest range containing that probability mass, directly reflecting the most likely parameter values.
+* Equal-Tailed Credible Interval (ETI/Percentile Method/CrI): Based on quantiles (e.g., 2.5% to 97.5%). It is easier to compute and interpret for symmetric distributions but may include less likely values in the tails if the distribution is highly skewed.
 
-### Results Table
+Therefore, there should be little difference between these two due to the simplicity of this model
+* check model diagnostics to be sure
 
-```{r}
+### Model Results Table
+
+```{r label="Table used in final report (Table 2)"}
 tbl_compare <- results2 %>%
   # combine LL and UL CIs
   mutate(
-    freq_ci = sprintf("(%.2f, %.2f)", freq_lo, freq_hi),
-    bay_ci  = sprintf("(%.2f, %.2f)", bay_lo, bay_hi)) %>%
-  select(outcome, n_lm, n_brm,
-         freq_est, freq_ci, freq_p,
-         bay_est, bay_ci, waic_full, waic_reduced, waic_diff) %>%
+    freq_ci = sprintf("(%.1f, %.1f)", freq_lo, freq_hi),
+    bay_ci  = sprintf("(%.1f, %.1f)", bay_HDI_lo, bay_HDI_hi)) %>%
+  select(outcome, n_brm, n_lm,
+         bay_est_med, bay_ci, waic_diff,
+         freq_est, freq_ci, freq_p) %>%
   
   gt(rowname_col = "outcome") %>%
   cols_label(
     n_lm = "N",
     n_brm = "N",
-    freq_est = "Estimate",
+    freq_est = "Users vs Non",
     freq_ci = "95% CI",
     freq_p   = "P-value",
-    bay_est  = "Mean",
+    bay_est_med  = "Users vs Non", # median
     bay_ci = "95% HDI",
-    waic_full = "WAIC Full",
-    waic_reduced = "WAIC Red",
-    waic_diff = "WAIC Diff"
-    ) %>%
+    waic_diff = md("WAIC Diff<br>(Full-Red)")) %>%
   # header for freq
   tab_spanner(
     label = "Frequentist",
@@ -776,10 +894,10 @@ tbl_compare <- results2 %>%
   # header for Bayes
   tab_spanner(
     label = "Bayesian",
-    columns = c(n_brm, bay_est, bay_ci, waic_full,waic_reduced,waic_diff)) %>%
+    columns = c(n_brm, bay_est_med, bay_ci, waic_diff)) %>%
   # format numbers 
-  fmt_number(columns = c(freq_est, freq_ci, bay_est, bay_ci), decimals = 2) %>%
-  fmt_number(columns = c(waic_full, waic_reduced, waic_diff), decimals = 1,
+  fmt_number(columns = c(freq_est, freq_ci, bay_est_med, bay_ci), decimals = 1) %>%
+  fmt_number(columns = c(waic_diff), decimals = 1,
              use_seps = F) %>%
   fmt_number(columns = freq_p, decimals = 3) %>%
   
@@ -798,193 +916,58 @@ tbl_compare <- results2 %>%
       spanners = c("Frequentist", "Bayesian"))) %>% 
   # center column labels
   tab_style(
-  style = cell_text(align = "center"),
-  locations = cells_column_labels(everything())) %>% 
-  # size of font
-  tab_options(
-    table.font.size = "small") %>% 
+    style = cell_text(align = "center"),
+    locations = cells_column_labels(everything())) %>% 
   # add a footnotes
   tab_footnote(
-    footnote = "Frequentist intervals are 95% confidence intervals; Bayesian intervals are 95% credible intervals.",
+    footnote = "For hard drug users versus non-users, estimates represent 
+    adjusted differences (Users − Non-users). Negative values indicate lower 
+    outcome values among users.",
+    locations = cells_column_labels(columns = c(bay_est_med, freq_est))) %>%
+  tab_footnote(
+    footnote = "Bayesian intervals are 95% high density intervals; 
+    Frequentist intervals are 95% confidence intervals.",
     locations = cells_column_labels(columns = c(freq_ci, bay_ci))) %>% 
   tab_footnote(
-    footnote = "For WAIC, lower values indicate better model fit.",
-    locations = cells_column_labels(columns = c(waic_full, waic_reduced, waic_diff)))
+    footnote = "For WAIC, lower values indicate better model fit. 
+    WAIC difference is the full model minus model w/out exposure (hard drug use).",
+    locations = cells_column_labels(columns = c(waic_diff))) %>% 
+  fmt_markdown(columns = outcome) %>% 
+  # makes for a more condensed table
+  tab_options(
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(2), #3 appears to be best
+    # reduce table width
+    table.width = pct(85),
+    # thickness of the horizontal borders
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
 
 tbl_compare
 ```
 
-After adjusting for baseline viral load and covariates, hard-drug users have about 0.37× the viral load of non-users at Year 2 (≈63% lower).
+```{r}
+summary(model.fits$cd4$brm)
+hdi(model.fits$cd4$brm)
+```
+
+
+Viral load: After adjusting for baseline viral load and covariates, hard-drug users had approximately 14% lower viral as compared to non-users at Year 2.
 
 ```{r}
 nobs(model.fits$cd4$lm)
 nrow(model.frame(model.fits$cd4$brm))  # or nrow(model.frame(cd4_brm))
-```
+report(model.fits$cd4$brm)
+sexit(model.fits$cd4$brm)
 
-
- 
-
-### Viral Load as outcome (N=464):
-```{r label = "frequentist model"}
-#options(scipen = 999)
-
-vload.model <- lm(log_vload2 ~ factor(hard0) + log_vload0 + age0 + bmi0 + factor(smoke0) + 
-                       factor(educ0) + factor(race0),
-              data=ana2_cc)
-
-summary(vload.model)
-nobs(vload.model)
-
-tidy(vload.model, conf.int = TRUE, exponentiate = FALSE) %>% 
-  mutate(
-    estimate = round(estimate, 3),
-    std.error = round(std.error, 3),
-    statistic = round(statistic, 3),
-    p.value = round(p.value, 3),
-    conf.low = round(conf.low, 3),
-    conf.high = round(conf.high, 3),
-    vload_copies_ml = round(10^estimate, 3),
-    vload_ml_LL = round(10^conf.low, 3),
-    vload_ml_UL = round(10^conf.high, 3))
-```
-
-After adjusting for baseline viral load, age, BMI, smoking, education, and race, baseline hard-drug users had an estimated 8.2% lower viral load at Year 2 compared with non-users (1-0.918), but this difference did not reach significance (p = 0.86).
-
-* We are comparing hard-drug users and non-users while holding the baseline viral load, age, BMI, smoking status, education, and race values constant. In other words, after other affects have been accounted for.
-* The model estimates differences in Year-2 viral load between groups after removing variation attributable to baseline viral load and covariates, effectively comparing individuals at the same starting level.
-
-Test to see if comorbidities can be used as precision variables or may be
-on the casual pathway from drug use to viral load - **ignore for primary analysis**
-```{r}
-options(scipen = 999)
-
-vload.model2 <- lm(log_vload2 ~ 
-                       # comorbidites
-                       factor(hbp0) + factor(diab0) + factor(liv34_0) + factor(kid0) +
-                       # Primary
-                       factor(hard0) + log_vload0 + age0 + bmi0 + 
-                       factor(smoke0) + factor(educ0) + factor(race0),
-              data=ana2)
-
-summary(vload.model2)
-nobs(vload.model2)
-
-tidy(vload.model2, conf.int = TRUE, exponentiate = FALSE) %>% 
-  mutate(
-    estimate = round(estimate, 3),
-    std.error = round(std.error, 3),
-    statistic = round(statistic, 3),
-    p.value = round(p.value, 3),
-    conf.low = round(conf.low, 3),
-    conf.high = round(conf.high, 3),
-    vload_copies_ml = round(10^estimate, 3),
-    vload_ml_LL = round(10^conf.low, 3),
-    vload_ml_UL = round(10^conf.high, 3))
-```
-
-Look at multicollinearity issues if present
-```{r}
-car::vif(vload.model2)
-```
-
-* hard drug use completely changes direction when including comorbidites. It now has an
-estimated 122.3% higher viral load as compared to non-drug users
-
-Bayesian (N=464)
-
-```{r label = "Bayes model"}
-vload.brm <- brm(
-  log_vload2 ~ hard0 + log_vload0 + age0 + bmi0 + smoke0 + educ0 + race0,
-  data = ana2_cc,
-  family = gaussian(),
-  prior = c(
-    # slope of 1 on log10 is 10-fold difference in viral load (weakly informative)
-    prior(normal(0, 1), class = "b"), 
-    prior(normal(0, 5), class = "Intercept"),  # less interpretable so make var wider
-    prior(student_t(3, 0, 2.5), class = "sigma")), # residual SD (half-t)
-  chains = 4, cores = 6, iter = 4000)
-
-summary(vload.brm)
-
-```
-
-```{r}
-vload_post1 <- posterior_summary(vload.brm) %>%
-  as.data.frame() %>%
-  rownames_to_column(var = "parameter")
-
-vload_post1
-
-vload_post2 <- describe_posterior(vload.brm, ci_method = "HDI", effects = "all")
-vload_post2
-
-vload_draws <- posterior::as_draws_df(vload.brm)
-vload_beta  <- vload_draws$b_hard0Yes
-
-# Directional evidence (hard drug users have higher log10 viral load)
-mean(vload_beta > 0)
-
-## limited evidence from labs in vitro and animal studies show hard drugs inhibits 
-## immune response and increases HIV replication. PIs believe TRT should lower viral load
-## and increase CD4 counts
-
-# alternative for viral load
-mean(vload_beta < 0)
-
-# 95% credible interval
-quantile(vload_beta, c(0.025, 0.975))
-```
-* The posterior mean difference in Year-2 log10 viral load for hard drug users vs non-users was -0.009 (95% CrI: -0.41, 0.39), with posterior probability $P(\beta>0)=0.97$
-
-
-### CD4 outcome model (N=464):
-* Did not transform as residuals looked good with raw values.
-```{r}
-options(scipen = 999)
-
-cd4.model <- lm(cd42 ~ factor(hard0) + cd40 + age0 + bmi0 + factor(smoke0) + 
-                       factor(educ0) + factor(race0),
-              data=ana2_cc)
-
-summary(cd4.model)
-nobs(cd4.model)
-
-tidy(cd4.model, conf.int = TRUE, exponentiate = FALSE) %>% 
-  mutate(
-    estimate = round(estimate, 3),
-    std.error = round(std.error, 3),
-    statistic = round(statistic, 3),
-    p.value = round(p.value, 3),
-    conf.low = round(conf.low, 3),
-    conf.high = round(conf.high, 3))
+report(model.fits$vload$brm)
+sexit(model.fits$vload$brm)
 ```
 
 After adjusting for baseline baseline CD4+ T cell counts, age, BMI, smoking, education, and race, baseline hard-drug users had an estimated lower CD4 count of approximately 172.2 at Year 2 compared with non-users [95% CI: (-235 to -109.4); p<0.001].
 
-```{r}
-cd4.brm <- brm(
-  cd42 ~ hard0 + log_vload0 + age0 + bmi0 + smoke0 + educ0 + race0,
-  data = ana2_cc,
-  family = gaussian(),
-  prior = c(
-    # slope of 1 on log10 is 10-fold difference in viral load (weakly informative)
-    prior(normal(0, 1), class = "b"), 
-    prior(normal(0, 5), class = "Intercept"),  # less interpretable so make var wider
-    prior(student_t(3, 0, 2.5), class = "sigma")), # residual SD (half-t)
-  chains = 4, cores = 6, iter = 4000)
 
-summary(cd4.brm)
-```
-
-
-
-Identify why I'm getting contrast error
-```{r}
-table(ana2$hard0, useNA = "ifany")
-table(ana2$smoke0, useNA = "ifany")
-table(ana2$educ0, useNA = "ifany")
-table(ana2$race0, useNA = "ifany")
-```
 
 
 Look at distribution of CD4 T cell count, log counts, and boxplots between drug user group
@@ -998,64 +981,15 @@ boxplot(ana2$cd40~ana2$hard0)
 Check that residuals look good using raw CD4 counts
 ```{r}
 # check residuals to determine if skewness is too extreme for this model approach
-plot(cd4.model)   # residuals vs fitted
+plot(model.fits$ment$lm)   # residuals vs fitted
+plot(model.fits$phys$lm)
+plot(model.fits$cd4$lm)
 
 ```
 
 * some outliers but overall residuals look good with raw CD4 values
 
 
-Check distribution of QOL measures to identify odd values
-```{r}
-hist(ana2$physical0)
-summary(ana2$physical0)
-hist(ana2$mental0)
-summary(ana2$mental0)
-
-```
-
-
-
-Build Mental QOL outcome model (frequentist)
-```{r}
-options(scipen = 999)
-
-mental.model <- lm(mental2 ~ factor(hard0) + mental0 + age0 + bmi0 + factor(smoke0) + 
-                       factor(educ0) + factor(race0),
-              data=ana2)
-
-summary(mental.model)
-
-tidy(mental.model, conf.int = TRUE, exponentiate = FALSE) %>% 
-  mutate(
-    estimate = round(estimate, 3),
-    std.error = round(std.error, 3),
-    statistic = round(statistic, 3),
-    p.value = round(p.value, 3),
-    conf.low = round(conf.low, 3),
-    conf.high = round(conf.high, 3))
-```
-
-
-Build Physical QOL outcome model (frequentist)
-```{r}
-options(scipen = 999)
-
-physical.model <- lm(physical2 ~ factor(hard0) + physical0 + age0 + bmi0 + factor(smoke0) + 
-                       factor(educ0) + factor(race0),
-              data=ana2)
-
-summary(physical.model)
-
-tidy(physical.model, conf.int = TRUE, exponentiate = FALSE) %>% 
-  mutate(
-    estimate = round(estimate, 3),
-    std.error = round(std.error, 3),
-    statistic = round(statistic, 3),
-    p.value = round(p.value, 3),
-    conf.low = round(conf.low, 3),
-    conf.high = round(conf.high, 3))
-```
 
 ## Mediation Analysis
 
@@ -1171,6 +1105,106 @@ med_draws <- as_draws_df(med.brm.fit)
 # get parameter names
 names(med_draws)[grepl("^b_", names(med_draws))]
 ```
+
+
+```{r}
+adh_outcomes <- list(
+  cd4   = list(y = "cd42", baseline = "cd40", adh="adh_bin"),
+  vload = list(y = "log_vload2", baseline = "log_vload0",adh="adh_bin"),
+  phys  = list(y = "physical2", baseline = "physical0",adh="adh_bin"),
+  ment  = list(y = "mental2", baseline = "mental0",adh="adh_bin"))
+```
+
+```{r label="Function to perform all mediation models at once"}
+fit_med_models <- function(outcome, baseline=NULL, adh, data) {
+  # model form - consistent across all models
+  full <- as.formula(
+    paste(outcome, "~ hard0 +", baseline, "+", adh,
+          "+ age0 + bmi0 + smoke0 + educ0 + race0"))
+  # with adh coeffecient removed
+  reduced <-  as.formula(
+    paste(outcome, "~ hard0 +",baseline,
+          "+ age0 + bmi0 + smoke0 + educ0 + race0"))
+  
+  # Frequentist model
+  lm_fit <- lm(full, data = data)
+  lm_red <- lm(reduced, data = data)
+  
+  # Bayes model
+  options(warn = -1)
+  brm_fit <- brm(
+    full,
+    data = data,
+    family = gaussian(),
+    prior = c(
+      # ***the priors need to be more uniform or more robust to different models**
+      prior(normal(0, 10000), class = "Intercept"), # less interpretable so make var wider
+      prior(normal(0, 10000), class = "b"),
+      prior(student_t(3, 0, 100^2), class = "sigma")), # half-t - standard
+    chains = 4, cores = 6, iter = 2000,
+    refresh = 0)
+  
+  # WAIC
+  log_lik_fit <- log_lik(brm_fit)
+  
+  # Bayes reduced model for testing hard drugs significance
+  brm_red <- brm(
+    reduced,
+    data = data,
+    family = gaussian(),
+    prior = c(
+      prior(normal(0, 10000), class = "Intercept"), 
+      prior(normal(0, 10000), class = "b"),
+      prior(student_t(3, 0, 1000), class = "sigma")), 
+    chains = 4, cores = 6, iter = 2000,
+    refresh = 0)
+    options(warn = 0)
+    
+    # WAIC
+    log_lik_red <- log_lik(brm_red)
+
+    # leave-one-out cross-validation for reduced model
+    loo_res <- suppressWarnings(brms::loo_compare(
+      brms::add_criterion(brm_fit, "loo"),
+      brms::add_criterion(brm_red, "loo"),
+      model_names = c("Full Model", "Reduced Model")))
+    
+    waic_fit <- waic(log_lik_fit)
+    waic_red <- waic(log_lik_red)
+    waic_diff <- loo_compare(waic_fit, waic_red)
+  
+  # store model results into a list
+  list(lm_fit = lm_fit, lm_red=lm_red, brm = brm_fit, brm_red = brm_red,
+      loo_res=loo_res, ll_fit=log_lik_fit, ll_red=log_lik_red,
+       waic_fit=waic_fit, waic_red=waic_red, waic_diff=waic_diff)
+}
+```
+
+Run all models at once
+```{r, eval=F}
+t0 <- Sys.time()
+
+model.med.fits <- imap(adh_outcomes, ~ fit_med_models(.x$y, .x$baseline, .x$adh,
+                                              ana2_cc))
+
+t1 <- Sys.time()
+message("Runtime: ",
+        round(as.numeric(difftime(t1, t0, units = "mins")), 2),
+        " minutes")
+```
+
+Runtime: 3.76min
+
+```{r}
+med_results <- imap_dfr(
+  model.med.fits, ~ extract_effects(
+    lm_fit = .x$lm_fit,
+    lm_red = .x$lm_red,
+    brm_fit = .x$brm,
+    brm_red = .x$brm_red,
+    outcome_name = .y))
+```
+
 
 ### Diagnsotics for Bayesian Mediation Model
 
@@ -1443,7 +1477,7 @@ ana2_drop %>%
   miss_var_summary()
 ```
 
-### Logistic Dropout Modelling
+### Logistic Dropout Modelling (N=648)
 ```{r}
 dropout.model <- glm(
   followup_status ~ age0 + bmi0 + race0 + smoke0 + educ0 +
@@ -1451,6 +1485,7 @@ dropout.model <- glm(
   family = binomial,
   data = ana2_drop)
 summary(dropout.model)
+nobs(dropout.model)
 broom::tidy(dropout.model, exponentiate = TRUE, conf.int = TRUE)
 ```
 * about 3.8% (1-0.962) lower odds of dropout per unit increase in physical QOL
