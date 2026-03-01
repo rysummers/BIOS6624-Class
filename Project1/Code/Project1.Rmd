@@ -58,6 +58,7 @@ library(purrr)
 library(loo)
 library(report)
 library(bayestestR)
+library(tidybayes)
 
 # load scripts
 source("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/Code/group_counts_ftn.R")
@@ -682,68 +683,36 @@ z_score <- abs(elpd_diff) / se_diff
 
 Extract key effects for table output function - must specify variable directly for now
 ```{r label="Function for extracting key elements from models"}
-extract_effects <- function(lm_fit, lm_red, 
-                            brm_fit, brm_red, 
-                            outcome_name, 
-                            waic_fit=NULL, waic_red=NULL) 
-  {
+extract_effects <- function(lm_fit, brm_fit, outcome_name, waic_fit, waic_red) {
+
   # Frequentist
-  freq_full <- broom::tidy(lm_fit, conf.int = TRUE) %>%
-    filter(term == "hard0Yes") %>% # needs to be more robust - revisit later
+  freq <- broom::tidy(lm_fit, conf.int = TRUE) %>%
+    filter(term == "hard0Yes") %>%
     transmute(
       outcome = outcome_name,
-      freq_full_est = estimate,
-      freq_full_lo = conf.low,
-      freq_full_hi = conf.high,
-      freq_full_p = p.value)
-  
-  freq_red <- broom::tidy(lm_red, conf.int = TRUE) %>%
-    filter(term == "hard0Yes") %>% # needs to be more robust - revisit later
-    transmute(
-      outcome = outcome_name,
-      freq_red_est = estimate,
-      freq_red_lo = conf.low,
-      freq_red_hi = conf.high,
-      freq_red_p = p.value)
+      freq_est = estimate,
+      freq_lo = conf.low,
+      freq_hi = conf.high,
+      freq_p = p.value)
 
   # Bayesian
-  draws_full <- posterior::as_draws_df(brm_fit)
-  beta_full <- draws_full$b_hard0Yes
+  draws <- posterior::as_draws_df(brm_fit)
+  beta <- draws$b_hard0Yes
   # Get HDI values
-  hdi_full <- hdi(brm_fit, parameters = "b_hard0Yes") # needs to be more robust - revisit later
+  hdi <- hdi(brm_fit, parameters = "b_hard0Yes") 
 
-  # full Bayes model
-  bay_full <- tibble(
+  bay <- tibble(
     outcome = outcome_name,
     # median
-    bay_full_est_med = median(beta_full),
+    bay_est_med = median(beta),
     # mean
-    bay_full_est_mean = mean(beta_full),
+    bay_est_mean = mean(beta),
     # credible intervals
-    bay_full_CrI_lo = quantile(beta_full, 0.025),
-    bay_full_CrI_hi = quantile(beta_full, 0.975),
+    bay_CrI_lo = quantile(beta, 0.025),
+    bay_CrI_hi = quantile(beta, 0.975),
     # HDIs
-    bay_full_HDI_lo = hdi_full$CI_low,
-    bay_full_HDI_hi = hdi_full$CI_high)
-
-  # reduced Bayes model
-  draws_red <- posterior::as_draws_df(brm_red)
-  beta_red <- draws_red$b_hard0Yes
-  # Get HDI values
-  hdi_red <- hdi(brm_red, parameters = "b_hard0Yes") 
-  
-  bay_red <- tibble(
-    outcome = outcome_name,
-    # median
-    bay_red_est_med = median(beta_red),
-    # mean
-    bay_red_est_mean = mean(beta_red),
-    # credible intervals
-    bay_red_CrI_lo = quantile(beta_red, 0.025),
-    bay_red_CrI_hi = quantile(beta_red, 0.975),
-    # HDIs
-    bay_red_HDI_lo = hdi_red$CI_low,
-    bay_red_HDI_hi = hdi_red$CI_high)
+    bay_HDI_lo = hdi$CI_low,
+    bay_HDI_hi = hdi$CI_high)
     
   # Extract WAIC values 
   elpd_full <- waic_fit$estimates["elpd_waic", "Estimate"]
@@ -770,21 +739,17 @@ extract_effects <- function(lm_fit, lm_red,
     
     elpd_diff = elpd_full - elpd_red,
     waic_diff = waic_full - waic_reduced)
-
+  
   # Create a list column with beta draws
-  beta_list_full <- list(beta_full)
-  beta_list_red <- list(beta_red)
-  
+  beta_list <- list(beta)
+
+
   # combine all tables
-  result <- freq_full %>%
-    dplyr::left_join(freq_red, by = "outcome") %>%
-    dplyr::left_join(bay_full, by = "outcome") %>%
-    dplyr::left_join(bay_red, by = "outcome") %>%
-    dplyr::left_join(waic_comp, by = "outcome") %>%
-    dplyr::mutate(beta_draws_full = beta_list_full) %>%   # Add as list column
-    dplyr::mutate(beta_draws_red = beta_list_red)
-  
-  return(result)
+  result <- freq %>%
+    dplyr::left_join(bay, by = "outcome") %>%
+    dplyr::left_join(waic_comp, by = "outcome") %>% 
+    dplyr::mutate(beta_draws = beta_list)   # Add as list column
+
 }
 ```
 
@@ -796,7 +761,6 @@ results <- imap_dfr(model.fits, ~ extract_effects(
   outcome_name = .y, 
   waic_fit = .x$waic_fit,
   waic_red = .x$waic_red))
-
 ```
 
 
@@ -961,8 +925,8 @@ nrow(model.frame(model.fits$cd4$brm))  # or nrow(model.frame(cd4_brm))
 report(model.fits$cd4$brm)
 sexit(model.fits$cd4$brm)
 
-report(model.fits$vload$brm)
-sexit(model.fits$vload$brm)
+report(model.fits$phys$brm)
+sexit(model.fits$phys$brm)
 ```
 
 After adjusting for baseline baseline CD4+ T cell counts, age, BMI, smoking, education, and race, baseline hard-drug users had an estimated lower CD4 count of approximately 172.2 at Year 2 compared with non-users [95% CI: (-235 to -109.4); p<0.001].
@@ -989,6 +953,29 @@ plot(model.fits$cd4$lm)
 
 * some outliers but overall residuals look good with raw CD4 values
 
+
+```{r}
+library(purrr)
+library(brms)
+library(bayesplot)
+library(ggplot2)
+
+all_fits <- c(
+  set_names(imap(model.fits, ~ 
+                   get_brms(.x)), paste0("Main_", names(model.fits))),
+  set_names(imap(model.med.fits, 
+                 ~ get_brms(.x)), paste0("Med_", names(model.med.fits))))
+
+pdf("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/Reports/traceplots_all_models.pdf", 
+    width = 11, height = 8.5)
+
+iwalk(all_fits, ~ {
+  trace_one(.x, title = .y,
+            pars_regex = "hard0Yes|adh_bin|sigma")  # adjust if needed
+  })
+
+dev.off()
+```
 
 
 ## Mediation Analysis
@@ -1050,7 +1037,7 @@ DAG
 \end{tikzpicture}
 ```
 
-Using mediation package
+Preliminary models using mediation package
 ```{r}
 # Mediator model: adherence as outcome
 m_mod <- glm(adh_bin ~ hard0 + age0 + bmi0 + smoke0 + educ0 + race0, 
@@ -1071,42 +1058,6 @@ summary(med_vl)
 ```
 
 
-Bayesian mediation
-```{r}
-# Mediator model
-med_model <- bf(adh_bin ~ hard0 + cd40 + age0 + bmi0 + smoke0 + educ0 + race0,
-                family = bernoulli(link = "logit"))
-
-# Outcome model
-out_model <- bf(cd42 ~ hard0 + adh_bin + cd40 +
-                age0 + bmi0 + smoke0 + educ0 + race0,
-                family = gaussian())
-
-med.brm.fit <- brm(med_model + out_model + set_rescor(FALSE),
-                   chains = 4, cores = 6, iter = 2000,
-           data = ana2_cc)
-```
-
-```{r}
-table(ana2_cc$adh_bin, useNA="ifany")
-```
-
-```{r}
-summary(med.brm.fit)
-```
-
-
-Extract the draws
-
-```{r}
-# extract posterior draws 
-med_draws <- as_draws_df(med.brm.fit)
-
-# get parameter names
-names(med_draws)[grepl("^b_", names(med_draws))]
-```
-
-
 ```{r}
 adh_outcomes <- list(
   cd4   = list(y = "cd42", baseline = "cd40", adh="adh_bin"),
@@ -1115,6 +1066,9 @@ adh_outcomes <- list(
   ment  = list(y = "mental2", baseline = "mental0",adh="adh_bin"))
 ```
 
+Similar to previous model function 
+* could have modified original function to handle both but given time constraints
+  this will have to do
 ```{r label="Function to perform all mediation models at once"}
 fit_med_models <- function(outcome, baseline=NULL, adh, data) {
   # model form - consistent across all models
@@ -1195,9 +1149,130 @@ message("Runtime: ",
 
 Runtime: 3.76min
 
+```{r, eval=F}
+# save model results
+qsave(model.med.fits, "/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/model.med.fits.qs",
+      nthreads = 6)
+```
+
+
+```{r}
+# load model results
+model.med.fits <- qread("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/model.med.fits.qs",
+      nthreads = 6)
+```
+
+```{r}
+extract_med_effects <- function(lm_fit, lm_red=NULL, 
+                            brm_fit, brm_red=NULL, 
+                            outcome_name, 
+                            waic_fit=NULL, waic_red=NULL) 
+  {
+  # Frequentist
+  freq_full <- broom::tidy(lm_fit, conf.int = TRUE) %>%
+    filter(term == "hard0Yes") %>% # needs to be more robust - revisit later
+    transmute(
+      outcome = outcome_name,
+      freq_full_est = estimate,
+      freq_full_lo = conf.low,
+      freq_full_hi = conf.high,
+      freq_full_p = p.value)
+  
+  freq_red <- broom::tidy(lm_red, conf.int = TRUE) %>%
+    filter(term == "hard0Yes") %>% # needs to be more robust - revisit later
+    transmute(
+      outcome = outcome_name,
+      freq_red_est = estimate,
+      freq_red_lo = conf.low,
+      freq_red_hi = conf.high,
+      freq_red_p = p.value)
+
+  # Bayesian
+  draws_full <- posterior::as_draws_df(brm_fit)
+  beta_full <- draws_full$b_hard0Yes
+  # Get HDI values
+  hdi_full <- hdi(brm_fit, parameters = "b_hard0Yes") # needs to be more robust - revisit later
+
+  # full Bayes model
+  bay_full <- tibble(
+    outcome = outcome_name,
+    # median
+    bay_full_est_med = median(beta_full),
+    # mean
+    bay_full_est_mean = mean(beta_full),
+    # credible intervals
+    bay_full_CrI_lo = quantile(beta_full, 0.025),
+    bay_full_CrI_hi = quantile(beta_full, 0.975),
+    # HDIs
+    bay_full_HDI_lo = hdi_full$CI_low,
+    bay_full_HDI_hi = hdi_full$CI_high)
+
+  # reduced Bayes model
+  draws_red <- posterior::as_draws_df(brm_red)
+  beta_red <- draws_red$b_hard0Yes
+  # Get HDI values
+  hdi_red <- hdi(brm_red, parameters = "b_hard0Yes") 
+  
+  bay_red <- tibble(
+    outcome = outcome_name,
+    # median
+    bay_red_est_med = median(beta_red),
+    # mean
+    bay_red_est_mean = mean(beta_red),
+    # credible intervals
+    bay_red_CrI_lo = quantile(beta_red, 0.025),
+    bay_red_CrI_hi = quantile(beta_red, 0.975),
+    # HDIs
+    bay_red_HDI_lo = hdi_red$CI_low,
+    bay_red_HDI_hi = hdi_red$CI_high)
+    
+  # Extract WAIC values 
+  elpd_full <- waic_fit$estimates["elpd_waic", "Estimate"]
+  elpd_full_se <- waic_fit$estimates["elpd_waic", "SE"]
+  waic_full <- waic_fit$estimates["waic", "Estimate"]
+  waic_full_se <- waic_fit$estimates["waic", "SE"]
+
+  elpd_red  <- waic_red$estimates["elpd_waic", "Estimate"]
+  elpd_red_se <- waic_red$estimates["elpd_waic", "SE"]
+  waic_reduced<- waic_red$estimates["waic", "Estimate"]
+  waic_reduced_se <- waic_red$estimates["waic", "SE"]
+
+  waic_comp <- tibble::tibble(
+    outcome = outcome_name,
+    elpd_full = elpd_full,
+    elpd_full_se = elpd_full_se,
+    waic_full = waic_full,
+    waic_full_se = waic_full_se, 
+    
+    elpd_red = elpd_red,
+    elpd_red_se = elpd_red_se,
+    waic_reduced = waic_reduced,
+    waic_reduced_se = waic_reduced_se,
+    
+    elpd_diff = elpd_full - elpd_red,
+    waic_diff = waic_full - waic_reduced)
+
+  # Create a list column with beta draws
+  beta_list_full <- list(beta_full)
+  beta_list_red <- list(beta_red)
+  
+  # combine all tables
+  result <- freq_full %>%
+    dplyr::left_join(freq_red, by = "outcome") %>%
+    dplyr::left_join(bay_full, by = "outcome") %>%
+    dplyr::left_join(bay_red, by = "outcome") %>%
+    dplyr::left_join(waic_comp, by = "outcome") %>%
+    dplyr::mutate(beta_draws_full = beta_list_full) %>%   # Add as list column
+    dplyr::mutate(beta_draws_red = beta_list_red)
+  
+  return(result)
+}
+```
+
+
 ```{r}
 med_results <- imap_dfr(
-  model.med.fits, ~ extract_effects(
+  model.med.fits, ~ extract_med_effects(
     lm_fit = .x$lm_fit,
     lm_red = .x$lm_red,
     brm_fit = .x$brm,
@@ -1205,28 +1280,238 @@ med_results <- imap_dfr(
     outcome_name = .y))
 ```
 
+```{r}
+# need to convert log10 VL back to OG units because of instability in ratio 
+# calculations when near 0
+med_results_bt <- med_results %>%
+  mutate(
+    # numeric columns
+    across(
+      c(freq_full_est, freq_full_lo, freq_full_hi,
+        bay_full_est_med, bay_full_est_mean, bay_full_HDI_lo, bay_full_HDI_hi,
+        freq_red_est,  freq_red_lo,  freq_red_hi,
+        bay_red_est_med, bay_red_est_mean, bay_red_HDI_lo, bay_red_HDI_hi),
+      ~ if_else(outcome == "vload", 10^.x, .x)),
+
+    # list-columns of draws
+    beta_draws_full = if_else(
+      outcome == "vload",
+      map(beta_draws_full, ~ 10^.x),
+      beta_draws_full),
+    beta_draws_red = if_else(
+      outcome == "vload",
+      map(beta_draws_red, ~ 10^.x),
+      beta_draws_red))
+```
+
+
+Calculate proportion mediated for each outcome 
+```{r}
+summ_draws <- function(x, probs = c(.025, .5, .975)) {
+  qs <- quantile(x, probs = probs, na.rm = TRUE)
+  tibble(
+    mean = mean(x, na.rm = TRUE),
+    median = unname(qs[2]),
+    lo = unname(qs[1]),
+    hi = unname(qs[3]),
+    p_gt0 = mean(x > 0, na.rm = TRUE))
+}
+```
+
+```{r}
+bay_med_calc <- med_results_bt %>%
+  mutate(
+    # Frequentist TE and DE
+    freq_TE = freq_red_est,
+    freq_DE = freq_full_est,
+    freq_ind = freq_TE - freq_DE,
+    freq_prop = if_else(abs(freq_TE) > 0.01, freq_ind / freq_TE, NA_real_),
+
+    # Bayesian TE and DE draws
+    bayes_prop = if_else(abs(bay_red_est_med) > 0.01, 
+                         (bay_red_est_med-bay_full_est_med) / bay_red_est_med, NA_real_),
+    beta_TE = beta_draws_red, # Total Effect : w/out ADH in model
+    beta_DE = beta_draws_full, # Direct Effect : w/ ADH in model
+    ind_draws = map2(beta_TE, beta_DE, ~ .x - .y), # indirect draws TE-DE
+    prop_draws = map2(beta_TE, ind_draws, ~ .y / .x),
+    prop_draws = map2(beta_TE, prop_draws, 
+                      ~ ifelse(abs(.x) > 0.01, .y, NA_real_))) %>%
+  transmute(
+    outcome,
+    # Frequentist (point estimates)
+    freq_TE, freq_DE, freq_ind, freq_prop, bayes_prop,
+    # indirect 
+    ind_summ = map(ind_draws, summ_draws),
+    prop_summ = map(prop_draws, summ_draws),
+    prop_valid = map_int(prop_draws, ~ sum(is.finite(.x), na.rm = TRUE)),
+    prop_total = map_int(beta_draws_red, length)) %>%
+  unnest_wider(ind_summ, names_sep = "_bay_ind") %>%
+  unnest_wider(prop_summ, names_sep = "_bay_prop")
+```
+
+
+```{r}
+med_results_total <- med_results_bt %>%
+  left_join(bay_med_calc, by = "outcome") 
+```
+
+
+
+```{r}
+# add sample sizes from each model and back-transform log10
+med_results_total2 <- med_results_total %>%
+  mutate(
+    n_lm  = map_int(names(model.med.fits), 
+                    ~ nobs(model.med.fits[[.x]]$lm_fit)),
+    n_brm = map_int(names(model.med.fits), 
+                    ~ nrow(model.frame(model.med.fits[[.x]]$brm))),
+    # # back-transform log10 viral load and make it more interpretable for PI
+    # across(
+    #   c(freq_est, freq_lo, freq_hi, bay_est_med, bay_HDI_lo, bay_HDI_hi),
+    #   ~ if_else(outcome == "vload", -(1-10^.x)*100, .x)),
+    outcome = recode(outcome,
+                     #<b>CD4</b><br><span style='font-weight:normal'>Mean Cell Diff</span>
+                     cd4   = "CD4<br><span style='font-style:italic; 
+                     font-weight:normal'>Mean Diff (cells/mm³)</span>",
+                     
+                     vload = "log<sub>10</sub> VL<br><span style='font-style:italic;
+                     font-weight:normal'>Mean Diff (copies/mL)</span>",
+                     
+                     phys  = "Physical QOL<br><span style='font-style:italic;
+                     font-weight:normal'>Mean Diff (0-100 scale)</span>",
+                     
+                     ment  = "Mental QOL<br><span style='font-style:italic;
+                     font-weight:normal'>Mean Diff (0-100 scale)</span>"))
+```
+
+
+
+### Mediation Model Results Table
+
+```{r label="Table used in final report (Table 3)"}
+tbl_compare2 <- med_results_total2 %>%
+  # combine LL and UL CIs
+  mutate(
+    freq_full_ci = sprintf("(%.1f, %.1f)", freq_full_lo, freq_full_hi),
+    freq_red_ci = sprintf("(%.1f, %.1f)", freq_red_lo, freq_red_hi),
+    bay_full_ci  = sprintf("(%.1f, %.1f)", bay_full_HDI_lo, bay_full_HDI_hi),
+    bay_red_ci  = sprintf("(%.1f, %.1f)", bay_red_HDI_lo, bay_red_HDI_hi),
+    med_ci = sprintf("(%.1f, %.1f)", prop_summ_bay_proplo, prop_summ_bay_prophi)
+    ) %>%
+  select(outcome, n_brm, n_lm,
+         bay_full_est_med,bay_red_est_med, 
+         bayes_prop, prop_summ_bay_propp_gt0, med_ci,
+         freq_full_est, freq_red_est, freq_prop) %>%
+  
+  gt(rowname_col = "outcome") %>%
+  cols_label(
+    n_lm = "N",
+    n_brm = "N",
+    # Freq
+    freq_full_est = "W/ADH",
+    freq_red_est = "W/out ADH",
+    freq_prop = "Prop Med",
+    # Bayes
+    bay_full_est_med  = "W/ADH",
+    bay_red_est_med  = "W/out ADH", 
+    # mediation cacls
+    bayes_prop = "Prop Med",
+    med_ci = "95% HDI",
+    prop_summ_bay_propp_gt0 = "Pr(Med>0)") %>%
+  # header for freq
+  tab_spanner(
+    label = "Frequentist",
+    columns = c(n_lm, freq_full_est, 
+                freq_red_est, freq_prop)) %>%
+  # header for Bayes
+  tab_spanner(
+    label = "Bayesian",
+    columns = c(n_brm, bay_full_est_med, bay_red_est_med, bayes_prop,
+                med_ci, prop_summ_bay_propp_gt0)) %>%
+  # format numbers 
+  fmt_number(columns = c(freq_full_est, bay_full_est_med,
+                         freq_red_est, bay_red_est_med), 
+             decimals = 1) %>%
+  fmt_number(columns = c(bayes_prop, freq_prop,
+                         med_ci), 
+             decimals = 3) %>%
+  fmt_number(columns = prop_summ_bay_propp_gt0, 
+             decimals = 3) %>%
+  
+  # bold specific text
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_stub(rows = everything())) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_spanners(
+      spanners = c("Frequentist", "Bayesian"))) %>% 
+  # center column labels
+  tab_style(
+    style = cell_text(align = "center"),
+    locations = cells_column_labels(everything())) %>% 
+  # add a footnotes
+  tab_footnote(
+    footnote = "For hard drug users versus non-users, estimates represent 
+    adjusted differences (Users − Non-users). Negative values indicate lower 
+    outcome values among users.",
+    locations = cells_column_labels(
+      columns = c(bay_full_est_med, freq_full_est))) %>%
+  tab_footnote(
+    footnote = "Proportion Mediated = (Model with ADH - Model without ADH) / Model without ADH or
+    (TE-DE)/TE",
+    locations = cells_column_labels(
+      columns = bayes_prop)) %>%
+  tab_footnote(
+    footnote = "95% high density intervals for proportion mediated",
+    locations = cells_column_labels(
+      columns = med_ci)) %>%
+  
+  fmt_markdown(columns = outcome) %>% 
+  # makes for a more condensed table
+  tab_options(
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(2), #3 appears to be best
+    # reduce table width
+    table.width = pct(85),
+    # thickness of the horizontal borders
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+tbl_compare2
+```
+
+
+
 
 ### Diagnsotics for Bayesian Mediation Model
 
 ```{r, eval=F}
-# diagnostics
-mcmc_areas(med_draws,prob = 0.95,
-             pars = c("b_adhbin_hard0Yes"))
+# Mediator model
+med_model <- bf(adh_bin ~ hard0 + cd40 + age0 + bmi0 + smoke0 + educ0 + race0,
+                family = bernoulli(link = "logit"))
+
+# Outcome model
+out_model <- bf(log_vload2 ~ hard0 + adh_bin + log_vload0 +
+                age0 + bmi0 + smoke0 + educ0 + race0,
+                family = gaussian())
+
+med.brm.fit <- brm(med_model + out_model + set_rescor(FALSE),
+                   chains = 4, cores = 6, iter = 2000,
+           data = ana2_cc)
 ```
 
 ```{r, eval=F}
-# Trace plots for each parameter
-mcmc_trace(post_samples,
-           pars = c("b_adhbin_hard0Yes", "b_cd42_hard0Yes"))
-
+table(ana2_cc$adh_bin, useNA="ifany")
 ```
 
-```{r}
-levels(ana2_cc$hard0)
-names(med_draws)[grepl("^b_", names(med_draws))]
+```{r, eval=F}
+summary(med.brm.fit)
 ```
 
-```{r}
+
+```{r, eval=F}
 ## X = drug use & M = adherence
 
 ## We are using complete-case analysis so use ana2_cc dataset
@@ -1260,13 +1545,13 @@ hd_YES_lt95 <- hd_YES; hd_YES_lt95$adh_bin <- factor(m0, levels = levM)
 hd_YES_gt95 <- hd_YES; hd_YES_gt95$adh_bin <- factor(m1, levels = levM)
 
 # expected CD4 if No hard drugs w/ <95% ADH + Covs
-mu0_m0 <- posterior_epred(med.brm.fit, resp = "cd42", newdata = hd_NO_lt95)  
+mu0_m0 <- posterior_epred(med.brm.fit, resp = "logvload2", newdata = hd_NO_lt95)  
 # expected CD4 if No hard drugs w/ ≥95% ADH + Covs
-mu0_m1 <- posterior_epred(med.brm.fit, resp = "cd42", newdata = hd_NO_gt95)  
+mu0_m1 <- posterior_epred(med.brm.fit, resp = "logvload2", newdata = hd_NO_gt95)  
 # expected CD4 if Yes hard drugs w/ <95% ADH + Covs
-mu1_m0 <- posterior_epred(med.brm.fit, resp = "cd42", newdata = hd_YES_lt95)  
+mu1_m0 <- posterior_epred(med.brm.fit, resp = "logvload2", newdata = hd_YES_lt95)  
 # expected CD4 if Yes hard drugs w/ ≥95% ADH + Covs
-mu1_m1 <- posterior_epred(med.brm.fit, resp = "cd42", newdata = hd_YES_gt95)  
+mu1_m1 <- posterior_epred(med.brm.fit, resp = "logvload2", newdata = hd_YES_gt95)  
 
 ## Standardize over the mediator distribution:
  # 1 - pM0 = prob of low ADH ; pM0 = prob of high ADH | No hard drug use
@@ -1301,7 +1586,7 @@ rbind(TE = summ(TE), NIE = summ(NIE), NDE = summ(NDE))
 
 Total Effect (TE)
 Interpretation:
-Moving from No hard drug use to Yes hard drug use is associated with an average decrease of about 168 CD4 cells at Year 2.
+Moving from No hard drug use to Yes hard drug use is associated with an average decrease of about 165 CD4 cells at Year 2.
 
 Indirect Effect (NIE-mediation through adherence)
 Interpretation:
@@ -1309,7 +1594,7 @@ There is strong posterior evidence that adherence mediates part of the associati
 
 Direct Effect (NDE)
 Interpretation:
-Even if adherence were held constant, hard drug use would still be associated with a ~174 cell lower CD4 count.
+Even if adherence were held constant, hard drug use would still be associated with a ≈170 cell lower CD4 count.
 
 This suggests that most of the effect is not explained by adherence
 
@@ -1332,8 +1617,8 @@ t.test(cd40 ~ complete_obs, data = ana2_dr)
 
 
 Generate a table that shows complete case analysis vs using all 715 observations
-* in other words 464 vs 715
-* since we are using complete case to be consistent across all analyses - I am comparing complete cases of 464 vs using all 715 subjects who has baseline or year 2. I reason this is the best approach??
+* in other words 463 vs 715
+* since we are using complete case to be consistent across all analyses - I am comparing complete cases of 463 vs using all 715 subjects who has baseline or year 2. I reason this is the best approach??
 ```{r}
 ana2_drop <- ana2_dr %>%
   mutate(
@@ -1345,7 +1630,7 @@ ana2_drop <- ana2_dr %>%
 tbl_dropout <- ana2_drop %>%
   tbl_summary(
     by = followup_status,
-    include = c(log_vload0, cd40, physical0, mental0),
+    include = c(hard0, log_vload0, cd40, physical0, mental0),
     type = list(
     all_continuous() ~ "continuous2"),
     statistic = list(
@@ -1356,6 +1641,7 @@ tbl_dropout <- ana2_drop %>%
     missing_text = "Missing Both Measurements",
     missing_stat = "{N_miss} ({p_miss}%)",
     label = list(
+      hard0 ~ "Hard Drug Use",
       log_vload0 ~ "Baseline viral load (log10 copies/mL)",
       cd40 ~ "Baseline CD4 T-cell Count",
       physical0 ~ "Baseline physical QOL",
@@ -1382,69 +1668,64 @@ tbl_dropout
 ```
 
 
-Function to create a table for each outcome to compare summary statistics at baseline to determine if dropout may bias results. - **Needs work**
+```{r label = "Used in final report as table 4"}
+ana2_drop <- ana2_dr %>%
+  mutate(
+    hard0 = factor(hard0, levels = c("No", "Yes"),
+                   labels = c("Non-users", "Users")),
+    followup_status = factor(
+      if_else(complete_obs, "Complete", "Missing"),
+      levels = c("Complete", "Missing")),
+        smoke0 = case_when(
+      smoke0 %in% c("2") ~ "Former",
+      smoke0 %in% c("3") ~ "Current",
+      TRUE ~ NA_character_) %>% 
+      factor(levels = c("Former", "Current")))
 
-```{r label="dropout table function"}
-make_dropout_tbl <- function(data, var, label_text) {
-  stopifnot(is.data.frame(data))
-  stopifnot(is.character(var), length(var) == 1)
-  stopifnot(is.character(label_text), length(label_text) == 1)
+tbl_dropout_strata <- ana2_drop %>%
+  tbl_strata(
+    strata = hard0,
+    .tbl_fun = ~ .x %>%
+      tbl_summary(
+        by = followup_status,
+        include = c(log_vload0, cd40, physical0, mental0),
+        type = all_continuous() ~ "continuous2",
+        statistic = list(
+          all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),
+          all_categorical() ~ "{n} ({p}%)"),
+        digits = all_continuous() ~ 1,
+        missing = "ifany",
+        missing_text = "Missing Both Measurements",
+        missing_stat = "{N_miss} ({p_miss}%)",
+        label = list(
+          log_vload0 ~ "Baseline viral load (log10 copies/mL)",
+          cd40 ~ "Baseline CD4 T-cell Count",
+          physical0 ~ "Baseline physical QOL",
+          mental0 ~ "Baseline mental QOL")) %>%
+      add_p(
+        test = list(
+          all_continuous() ~ "wilcox.test",
+          all_categorical() ~ "fisher.test"   # good default if hard drug Yes is small
+        ),
+        pvalue_fun = ~ style_pvalue(.x, digits = 3)) %>%
+      add_n() %>%
+      modify_spanning_header(all_stat_cols() ~ "**Cases**") %>%
+      modify_caption("**Baseline characteristics by follow-up status, 
+                     stratified by baseline hard drug use**")) %>%
+  bold_labels()
 
-  # header counts + %
-  hdr_df <- data %>%
-    dplyr::count(followup_status, name = "n") %>%
-    dplyr::mutate(
-      pct = n / sum(n),
-      hdr = paste0(
-        "**", followup_status, "**<br>N = ", n,
-        " (", scales::percent(pct, accuracy = 0.1), ")"))
-
-  hdr_list <- setNames(as.list(hdr_df$hdr), paste0("stat_", seq_len(nrow(hdr_df))))
-
-  # label as a formula: var ~ "Label"
-  lab_fml <- rlang::new_formula(rlang::sym(var), label_text)
-
-  data %>%
-    gtsummary::tbl_summary(
-      by = followup_status,
-      include = dplyr::all_of(var),
-      type = list(gtsummary::all_continuous() ~ "continuous2"),
-      statistic = list(
-        gtsummary::all_continuous() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})")
-      ),
-      digits = gtsummary::all_continuous() ~ 1,
-      missing = "ifany",
-      missing_text = "Missing Both Measurements",
-      missing_stat = "{N_miss} ({p_miss}%)",
-      label = lab_fml
-    ) %>%
-    gtsummary::add_p(pvalue_fun = ~gtsummary::style_pvalue(.x, digits = 3)) %>%
-    gtsummary::add_n() %>%
-    gtsummary::add_overall() %>%
-    gtsummary::bold_labels() %>%
-    gtsummary::modify_spanning_header(c("stat_1", "stat_2") ~ "**Cases**") %>%
-    gtsummary::modify_header(!!!hdr_list) %>% 
-    as_gt() %>%
+# Convert to gt (optional; tbl_strata prints fine as gtsummary too)
+tbl_dropout_strata_gt <- 
+  tbl_dropout_strata %>% 
+  as_gt() %>% 
     tab_options(
-      table.font.size = "small",
-      heading.align = "left",
-      data_row.padding = px(3),
-      table.border.top.width = px(2),
-      table.border.bottom.width = px(2))
-}
-```
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
 
-Test function
-```{r}
-vars <- list(
-  log_vload0 = "Baseline viral load (log10 copies/mL)",
-  cd40 = "Baseline CD4 T-cell Count",
-  physical0 = "Baseline physical QOL",
-  mental0 = "Baseline mental QOL")
-
-
-tables <- purrr::imap(vars, ~ make_dropout_tbl(ana2_drop, var = .y, label_text = .x))
-tables$log_vload0
+tbl_dropout_strata_gt
 ```
 
 
@@ -1470,15 +1751,9 @@ miss_tbl <- pairs %>%
 miss_tbl
 ```
 
-Using nanier package to calculate missing based ana dataset where each row is one subject
-```{r}
-ana2_drop %>%
-  ungroup() %>% 
-  miss_var_summary()
-```
 
 ### Logistic Dropout Modelling (N=648)
-```{r}
+```{r, eval=FALSE}
 dropout.model <- glm(
   followup_status ~ age0 + bmi0 + race0 + smoke0 + educ0 +
             log_vload0 + cd40 + physical0 + mental0 + hard0,
@@ -1487,9 +1762,213 @@ dropout.model <- glm(
 summary(dropout.model)
 nobs(dropout.model)
 broom::tidy(dropout.model, exponentiate = TRUE, conf.int = TRUE)
-```
-* about 3.8% (1-0.962) lower odds of dropout per unit increase in physical QOL
-* about 2.5% (1-0.975) lower odds of dropout per unit increase in age
 
+qsave(dropout.model, "/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/dropout.model.qs")
+```
+
+```{r}
+dropout.model <- qread("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/dropout.model.qs")
+```
+
+* about 3.8% (1-0.962) lower odds of dropout per unit increase in physical QOL
+    * Each one-unit increase in baseline physical QOL was associated with approximately 3.9% higher odds of remaining in the study.
+    
+* about 2.5% (1-0.975) lower odds of dropout per unit increase in age
+    * Each one-year increase in age was associated with approximately 2.6% higher odds of remaining in follow-up.
+
+In logistic regression models, each one-point increase in baseline physical QOL was associated with 3.8% lower odds of dropout (OR = 0.962), corresponding to approximately 3.9% higher odds of remaining in follow-up. Similarly, each additional year of age was associated with 2.5% lower odds of dropout (OR = 0.975), or 2.6% higher odds of retention.
+
+
+```{r, eval=FALSE}
+dropout.brm <- brm(
+  followup_status ~ age0 + bmi0 + race0 + smoke0 + educ0 +
+            log_vload0 + cd40 + physical0 + mental0 + hard0,
+    data = ana2_drop,
+    family = bernoulli(link = "logit"),
+    prior = c(
+      prior(normal(0, 5), class = "Intercept"), 
+      prior(normal(0, 2.5), class = "b")), 
+    chains = 4, cores = 6, iter = 2000,
+    refresh = 0)
+
+summary(dropout.brm)
+nobs(dropout.brm)
+
+qsave(dropout.brm, "/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/dropout.brm.qs")
+
+```
+```{r}
+dropout.brm <- qread("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/dropout.brm.qs")
+```
+
+
+
+
+```{r}
+
+# Frequentist (OR + 95% CI)
+freq_tbl <- broom::tidy(dropout.model, exponentiate = TRUE, conf.int = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  transmute(
+    term,
+    freq_or = estimate,
+    freq_lo = conf.low,
+    freq_hi = conf.high,
+    freq_p  = p.value)
+
+# Bayesian tidy (OR + 95% CrI)
+bay_tbl <- broom.mixed::tidy(
+  dropout.brm,
+  effects = "fixed",
+  conf.int = TRUE,
+  conf.level = 0.95) %>%
+  filter(term != "Intercept") %>%
+  transmute(
+    term,
+    bay_or = exp(estimate),
+    bay_lo = exp(conf.low),
+    bay_hi = exp(conf.high))
+
+#Combine
+dropout_combined <- full_join(bay_tbl, freq_tbl, by = "term")
+```
+
+
+```{r}
+label_map <- c(
+  "age0" = "Age (years)",
+  "physical0" = "Baseline physical QOL",
+  "mental0" = "Baseline mental QOL",
+  "log_vload0" = "Baseline viral load (log10)",
+  "cd40" = "Baseline CD4",
+  "bmi0" = "BMI")
+
+dropout_sig2 <- dropout_combined %>%
+  mutate(
+    # % change in odds (per unit increase)
+    bay_pct  = (bay_or  - 1) * 100,
+    bay_pct_lo = (bay_lo - 1) * 100,
+    bay_pct_hi = (bay_hi - 1) * 100,
+    freq_pct = (freq_or - 1) * 100,
+    freq_pct_lo = (freq_lo - 1) * 100,
+    freq_pct_hi = (freq_hi - 1) * 100) %>% 
+  mutate(
+    Predictor = recode(term, !!!label_map, .default = term),
+    bay_ci  = sprintf("(%.2f, %.2f)", bay_pct_lo, bay_pct_hi),
+    freq_ci = sprintf("(%.2f, %.2f)", freq_pct_lo, freq_pct_hi)) %>%
+  select(Predictor, bay_pct, bay_ci, freq_pct, freq_ci, freq_p)
+```
+
+```{r label = "Used in final report as table 5"}
+tbl_dropout_compare <- dropout_sig2 %>%
+  mutate(
+    n_lm  = nobs(dropout.model),
+    n_brm = nrow(model.frame(dropout.brm))) %>% 
+  filter(Predictor %in% c("Age (years)", "Baseline physical QOL")) %>% 
+  gt(rowname_col = "Predictor") %>%
+  cols_label(
+    n_brm = "N", 
+    n_lm = "N",
+    bay_pct = "%Δ in Odds",
+    bay_ci = "95% HDI",
+    freq_pct = "%Δ in Odds",
+    freq_ci = "95% CI",
+    freq_p  = "P-value") %>%
+  tab_spanner(
+    label = "Bayesian",
+    columns = c(n_brm, bay_pct, bay_ci)) %>%
+  tab_spanner(
+    label = "Frequentist",
+    columns = c(n_lm, freq_pct, freq_ci, freq_p)) %>%
+  fmt_number(columns = c(bay_pct, freq_pct), decimals = 2) %>%
+  fmt_number(columns = freq_p, decimals = 3) %>%
+    # bold specific text
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_stub(rows = everything())) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_spanners(
+      spanners = c("Frequentist", "Bayesian"))) %>% 
+  # p-value formatting like your other tables
+  text_transform(
+    locations = cells_body(columns = freq_p),
+    fn = function(x) ifelse(as.numeric(x) < 0.001, "<0.001",
+                            format(round(as.numeric(x), 3), nsmall = 3))) %>%
+  tab_options(table.font.size = "small") %>%
+  tab_source_note(
+    source_note = "Values represent percent change in the odds of being missing 
+    (dropout) per one-unit increase in the predictor (computed as (OR − 1) × 100).
+    Negative values indicate lower odds of dropout.") %>% 
+  tab_options(
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3),
+    table.width = pct(85),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+tbl_dropout_compare
+```
+
+
+## Bayesian Diagnostic Plots
+
+```{r}
+all_models <- c(model.fits, list(dropout = dropout.brm))
+all_med_models <- model.med.fits   
+
+get_brms <- function(x) {
+  if (inherits(x, "brmsfit")) return(x)
+  if (is.list(x) && !is.null(x$brm) && inherits(x$brm, "brmsfit")) return(x$brm)
+  stop("Couldn't find a brmsfit. Is it stored as $brm or is the element itself a brmsfit?")
+  }
+
+get_pars <- function(fit, pars_regex = "b_.*hard0Yes|b_.*adh_bin|sigma") {
+  all_pars <- parnames(fit)
+  all_pars[grepl(pars_regex, all_pars)]
+  }
+
+trace_one <- function(fit, title = NULL) {
+
+  pars_regex <- if (!is.null(title) && grepl("dropout", title, ignore.case = TRUE)) {
+    # dropout model: trace age0 and physical0 (Bernoulli has no sigma)
+    "b_.*age0$|b_.*physical0$"
+  } else {
+    "b_.*hard0Yes|b_.*adh_bin|sigma"
+  }
+
+  pars <- get_pars(fit, pars_regex = pars_regex)
+
+  if (length(pars) == 0) {
+    message("No matching parameters found for: ", title)
+    return(invisible(NULL))
+  }
+
+  p <- bayesplot::mcmc_trace(as.array(fit), pars = pars)
+  if (!is.null(title)) p <- p + ggplot2::ggtitle(title)
+  p
+}
+
+# ---- SAVE TO PDF ----
+out_file <- "/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/Reports/traceplots_all_models.pdf"
+
+pdf(out_file, width = 10, height = , onefile = TRUE)
+
+# main outcome models + dropout
+iwalk(imap(all_models, ~ get_brms(.x)), ~ {
+  p <- trace_one(.x, title = paste("Main:", .y))
+  if (!is.null(p)) print(p)
+})
+
+# mediation models
+iwalk(imap(all_med_models, ~ get_brms(.x)), ~ {
+  p <- trace_one(.x, title = paste("Mediation:", .y))
+  if (!is.null(p)) print(p)
+})
+
+dev.off()
+out_file
+```
 
 
