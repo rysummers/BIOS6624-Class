@@ -237,12 +237,6 @@ Clinically meaning changes
 * 2pts on QOL
 * 50 CD4
 
-***Explain why we choose a specific modeling strategy in Methods***
-***If you remove observations, state if they were removed from all analyses***
-***Don't show regression coefficients - be more informative to a non-stats person***
-***Label the plots in code that are used in final report***
-***Descriptive for adherence and fit hard drug and hard drug + ADH***
-
 Test function
 ```{r}
 # load from starting R code chunk
@@ -1317,8 +1311,9 @@ bay_med_calc <- med_results_bt %>%
     outcome,
     # Frequentist (point estimates)
     freq_TE, freq_DE, freq_ind, freq_prop, bayes_prop,
-    # indirect 
+    # indirect (TE-DE) - should be positive for proper mediation - exposure effect should decrease
     ind_summ = map(ind_draws, summ_draws),
+    # proportion mediated
     prop_summ = map(prop_draws, summ_draws),
     prop_valid = map_int(prop_draws, ~ sum(is.finite(.x), na.rm = TRUE)),
     prop_total = map_int(beta_draws_red, length)) %>%
@@ -1373,47 +1368,46 @@ tbl_compare2 <- med_results_total2 %>%
     freq_red_ci = sprintf("(%.1f, %.1f)", freq_red_lo, freq_red_hi),
     bay_full_ci  = sprintf("(%.1f, %.1f)", bay_full_HDI_lo, bay_full_HDI_hi),
     bay_red_ci  = sprintf("(%.1f, %.1f)", bay_red_HDI_lo, bay_red_HDI_hi),
-    med_ci = sprintf("(%.1f, %.1f)", prop_summ_bay_proplo, prop_summ_bay_prophi)
+    med_ci = sprintf("(%.1f, %.1f)", prop_summ_bay_proplo, prop_summ_bay_prophi),
+    ind_summ_bay_indp_lt0 = 1-ind_summ_bay_indp_gt0,
+    chng_in_coeff = bay_red_est_med-bay_full_est_med,
     ) %>%
-  select(outcome, n_brm, n_lm,
-         bay_full_est_med,bay_red_est_med, 
-         bayes_prop, prop_summ_bay_propp_gt0, med_ci,
-         freq_full_est, freq_red_est, freq_prop) %>%
+  select(outcome, n_brm, n_lm, bay_red_est_med,
+         bay_full_est_med, chng_in_coeff,
+         bayes_prop, med_ci,
+         freq_red_est, freq_full_est, freq_prop) %>%
   
   gt(rowname_col = "outcome") %>%
   cols_label(
     n_lm = "N",
     n_brm = "N",
     # Freq
-    freq_full_est = "W/ADH",
     freq_red_est = "W/out ADH",
+    freq_full_est = "W/ADH",
     freq_prop = "Prop Med",
     # Bayes
+    bay_red_est_med  = "W/out ADH",
     bay_full_est_med  = "W/ADH",
-    bay_red_est_med  = "W/out ADH", 
+    chng_in_coeff = "Δ",
     # mediation cacls
     bayes_prop = "Prop Med",
-    med_ci = "95% HDI",
-    prop_summ_bay_propp_gt0 = "Pr(Med>0)") %>%
+    med_ci = "95% HDI") %>% 
   # header for freq
   tab_spanner(
     label = "Frequentist",
-    columns = c(n_lm, freq_full_est, 
-                freq_red_est, freq_prop)) %>%
+    columns = c(n_lm, freq_red_est, freq_full_est, freq_prop)) %>%
   # header for Bayes
   tab_spanner(
     label = "Bayesian",
-    columns = c(n_brm, bay_full_est_med, bay_red_est_med, bayes_prop,
-                med_ci, prop_summ_bay_propp_gt0)) %>%
+    columns = c(n_brm, bay_red_est_med, bay_full_est_med, chng_in_coeff,
+                bayes_prop, med_ci)) %>%
   # format numbers 
-  fmt_number(columns = c(freq_full_est, bay_full_est_med,
+  fmt_number(columns = c(freq_full_est, bay_full_est_med,chng_in_coeff,
                          freq_red_est, bay_red_est_med), 
              decimals = 1) %>%
   fmt_number(columns = c(bayes_prop, freq_prop,
                          med_ci), 
-             decimals = 3) %>%
-  fmt_number(columns = prop_summ_bay_propp_gt0, 
-             decimals = 3) %>%
+             decimals = 3) %>% 
   
   # bold specific text
   tab_style(
@@ -1435,6 +1429,11 @@ tbl_compare2 <- med_results_total2 %>%
     locations = cells_column_labels(
       columns = c(bay_full_est_med, freq_full_est))) %>%
   tab_footnote(
+    footnote = "Represents the change in the hard-drug coefficient after 
+    adjusting for adherence; Not a formal mediation effect.",
+    locations = cells_column_labels(
+      columns = c(chng_in_coeff))) %>%
+  tab_footnote(
     footnote = "Proportion Mediated = (Model with ADH - Model without ADH) / Model without ADH or
     (TE-DE)/TE",
     locations = cells_column_labels(
@@ -1443,7 +1442,7 @@ tbl_compare2 <- med_results_total2 %>%
     footnote = "95% high density intervals for proportion mediated",
     locations = cells_column_labels(
       columns = med_ci)) %>%
-  
+
   fmt_markdown(columns = outcome) %>% 
   # makes for a more condensed table
   tab_options(
@@ -1774,6 +1773,8 @@ nobs(dropout.brm)
 qsave(dropout.brm, "/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/dropout.brm.qs")
 
 ```
+
+
 ```{r}
 dropout.brm <- qread("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/DataProcessed/dropout.brm.qs")
 ```
@@ -1842,6 +1843,8 @@ tbl_dropout_compare <- dropout_sig2 %>%
     n_lm  = nobs(dropout.model),
     n_brm = nrow(model.frame(dropout.brm))) %>% 
   filter(Predictor %in% c("Age (years)", "Baseline physical QOL")) %>% 
+  select(n_brm, bay_pct,bay_ci,
+         n_lm, freq_pct, freq_ci,freq_p,Predictor) %>% 
   gt(rowname_col = "Predictor") %>%
   cols_label(
     n_brm = "N", 
@@ -1948,13 +1951,6 @@ dev.off()
 out_file
 ```
 
-
-
-```{r}
-HIV_raw %>% 
-  filter(hard_drugs=="Yes" & years ==2) %>% 
-  group_by(ADH) %>% 
-  summarise(counts = n())
-```
+`
 
 
