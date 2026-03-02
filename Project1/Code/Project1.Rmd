@@ -418,12 +418,12 @@ ggplot(long_outcomes, aes(x = years_f, y = value, fill = hard_drugs)) +
 
 ### Table1 Demographics
 
-```{r}
+```{r label = "Used in final report as Table 1"}
 tbl1 <- ana2_cc %>%
   
   tbl_summary(
     by = hard0,
-    include = c(mental0, physical0, log_vload0, cd40, age0, bmi0, smoke0, 
+    include = c(mental0, physical0, log_vload0, cd40, adh_bin, age0, bmi0, smoke0, 
                 educ0, race0), # add ADH or no?
     type = all_continuous() ~ "continuous2",
     statistic = list(
@@ -444,6 +444,7 @@ tbl1 <- ana2_cc %>%
       physical0 ~ "Physical QOL",
       log_vload0  ~  "Viral Load (log<sub>10</sub> copies/mL)",
       cd40  ~ "CD4 T-cell Count",
+      adh_bin ~ "Adherence",
       age0 ~ "Age",
       bmi0 ~ "BMI",
       smoke0 ~ "Smoke",
@@ -952,30 +953,6 @@ plot(model.fits$cd4$lm)
 ```
 
 * some outliers but overall residuals look good with raw CD4 values
-
-
-```{r}
-library(purrr)
-library(brms)
-library(bayesplot)
-library(ggplot2)
-
-all_fits <- c(
-  set_names(imap(model.fits, ~ 
-                   get_brms(.x)), paste0("Main_", names(model.fits))),
-  set_names(imap(model.med.fits, 
-                 ~ get_brms(.x)), paste0("Med_", names(model.med.fits))))
-
-pdf("/Users/ryan_summers/GitHub/BIOS6624-Class/Project1/Reports/traceplots_all_models.pdf", 
-    width = 11, height = 8.5)
-
-iwalk(all_fits, ~ {
-  trace_one(.x, title = .y,
-            pars_regex = "hard0Yes|adh_bin|sigma")  # adjust if needed
-  })
-
-dev.off()
-```
 
 
 ## Mediation Analysis
@@ -1914,7 +1891,7 @@ tbl_dropout_compare
 
 ## Bayesian Diagnostic Plots
 
-```{r}
+```{r, eval=FALSE}
 all_models <- c(model.fits, list(dropout = dropout.brm))
 all_med_models <- model.med.fits   
 
@@ -1969,6 +1946,15 @@ iwalk(imap(all_med_models, ~ get_brms(.x)), ~ {
 
 dev.off()
 out_file
+```
+
+
+
+```{r}
+HIV_raw %>% 
+  filter(hard_drugs=="Yes" & years ==2) %>% 
+  group_by(ADH) %>% 
+  summarise(counts = n())
 ```
 
 
