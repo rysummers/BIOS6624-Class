@@ -1,0 +1,368 @@
+---
+title: 'BIOS 6624: Project 2'
+author: "Ryan Summers"
+date: "2026-03-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(powertools)
+```
+
+## Load Data
+
+```{r}
+prelim_df <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project2/DataRaw/PrelimData.csv")
+```
+## Exploratory Data Analysis (EDA)
+
+Calculate correlations between predictors and outcomes
+```{r}
+cat(
+"Pearson correlation between predictor inflammatory marker IL-6 and outcome 
+  cognitive measure CVLT is", round(cor(prelim_df$IL_6, prelim_df$CVLT_CNG3),3),
+  "in the 95% confidence range of",
+  round(cor.test(prelim_df$IL_6,prelim_df$CVLT_CNG3)$conf.int[1],3), "to",
+  round(cor.test(prelim_df$IL_6, prelim_df$CVLT_CNG3)$conf.int[2],3),
+  "\n\n")
+
+cat(
+"Pearson correlation between predictor inflammatory marker IL-6 and outcome
+  cortical thickness is", round(cor(prelim_df$IL_6, prelim_df$CORT_CNG3),3)
+  ,"in the 95% confidence range of", 
+  round(cor.test(prelim_df$IL_6, prelim_df$CORT_CNG3)$conf.int[1],3), "to",
+  round(cor.test(prelim_df$IL_6, prelim_df$CORT_CNG3)$conf.int[2],3),
+  "\n\n")
+
+cat(
+  "Pearson correlation between predictor inflammatory marker MCP-1 and outcome
+  cognitive measure CVLT is", round(cor(prelim_df$MCP_1, prelim_df$CVLT_CNG3),3),
+  "in the 95% confidence range of", 
+  round(cor.test(prelim_df$MCP_1, prelim_df$CVLT_CNG3)$conf.int[1],3), "to",
+  round(cor.test(prelim_df$MCP_1, prelim_df$CVLT_CNG3)$conf.int[2],3),
+  "\n\n")
+
+
+cat(
+  "Pearson correlation between predictor inflammatory marker MCP-1 and outcome
+  cortical thickness is", round(cor(prelim_df$MCP_1, prelim_df$CORT_CNG3),3),
+  "in the 95% confidence range of", 
+  round(cor.test(prelim_df$MCP_1, prelim_df$CORT_CNG3)$conf.int[1],3), "to",
+  round(cor.test(prelim_df$MCP_1, prelim_df$CORT_CNG3)$conf.int[2],3),
+  "\n\n")
+
+
+cat(
+  "Pearson correlation between predictor inflammatory marker MCP-1 and predictor
+  IL-6 is", round(cor(prelim_df$MCP_1, prelim_df$IL_6),3),
+  "in the 95% confidence range of", 
+  round(cor.test(prelim_df$MCP_1, prelim_df$IL_6)$conf.int[1],3), "to",
+  round(cor.test(prelim_df$MCP_1, prelim_df$IL_6)$conf.int[2],3),
+  "\n\n")
+
+
+cat(
+  "Pearson correlation between outcome cognitive and cortical measures is", 
+  round(cor(prelim_df$CVLT_CNG3, prelim_df$CORT_CNG3),3),
+  "in the 95% confidence range of", 
+  round(cor.test(prelim_df$CVLT_CNG3, prelim_df$CORT_CNG3)$conf.int[1],3), "to",
+  round(cor.test(prelim_df$CVLT_CNG3, prelim_df$CORT_CNG3)$conf.int[2],3),
+  "\n\n")
+
+```
+
+```{r}
+cor.test(prelim_df$IL_6, prelim_df$CVLT_CNG3)$conf.int[1]
+
+test <- cor.test(prelim_df$IL_6, prelim_df$CVLT_CNG3)
+test$conf.int
+
+```
+Sample interpretation:
+Preliminary data suggest correlations between inflammatory marker IL-6 and outcome changes from baseline to year-1 in CVLT are in the 95% confidence range of -0.566 to 0.112 with a point estimate of -0.259, which informed the range of correlations evaluated in the power analysis.
+
+
+
+```{r}
+# convert df to long
+prelim_long <- prelim_df %>% 
+  pivot_longer(
+    cols = c(CVLT_CNG3, CORT_CNG3, IL_6, MCP_1),
+    names_to = "variable", values_to = "value")
+
+ggplot(prelim_long, aes(y = value, fill = variable)) +
+  geom_boxplot(width = 0.9) +
+  facet_wrap(~ variable, scales = "free_y") +
+  labs(
+    title = "Distributions from Prelim Data",
+    x = "",
+    y = NULL) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+```
+
+## Aim 1 Power Analysis
+
+```{r}
+# function get corr estimate and 95% CI
+cor_ci <- function(data, x, y) {
+  ct <- cor.test(data[[x]], data[[y]])
+  tibble(
+    predictor = x,
+    outcome   = y,
+    r         = unname(ct$estimate),
+    ci_low    = ct$conf.int[1],
+    ci_high   = ct$conf.int[2],
+    p_value   = ct$p.value,
+    n         = sum(complete.cases(data[[x]], data[[y]])))
+  }
+
+# correlations for pilot effect-size range
+cor_results <- bind_rows(
+  cor_ci(prelim_df, "IL_6", "CVLT_CNG3"),
+  cor_ci(prelim_df, "IL_6", "CORT_CNG3"),
+  cor_ci(prelim_df, "MCP_1", "CVLT_CNG3"),
+  cor_ci(prelim_df, "MCP_1", "CORT_CNG3"),
+  cor_ci(prelim_df, "IL_6", "MCP_1"),  # predictor-predictor
+  cor_ci(prelim_df, "CVLT_CNG3", "CORT_CNG3"))       # outcome-outcome
+
+```
+
+
+```{r}
+alpha_grid <- c(0.05, 0.025, 0.01, 0.001)
+power_results <- cor_results %>%
+  mutate(
+    r_low  = pmax(r - 0.3, -0.99),
+    r_high = pmin(r + 0.3,  0.99),
+    r_grid = map2(r_low, r_high, ~ seq(.x, .y, by = 0.01)),
+    grid_df = map(r_grid, ~ tidyr::crossing(
+      r = .x,
+      alpha = alpha_grid)),
+    power_table = map(grid_df, ~ mutate(
+      .x,
+      power = map2_dbl(r, alpha, \(rr, aa)
+        powertools::corr.1samp(
+          N = 175,
+          rho0 = 0,
+          rhoA = rr,
+          alpha = aa,
+          sides = 2
+        )))))
+
+# convert results to long for plotting
+power_results_long <- power_results %>%
+  select(predictor, outcome, power_table) %>%
+  tidyr::unnest(power_table)
+
+# initialize variables of interest
+pred_vars <- c("IL_6", "MCP_1")
+out_vars  <- c("CVLT_CNG3", "CORT_CNG3")
+
+# filter to only variables of interest and add categorical alpha levels to test
+plot_dat <- power_results_long %>%
+  filter(predictor %in% pred_vars,
+         outcome %in% out_vars) %>%
+  mutate(
+    alpha = factor(alpha,
+                   levels = c(0.05, 0.025, 0.01, 0.001),
+                   labels = c("α = 0.05", "α = 0.025", "α = 0.01",
+                              "α = 0.001"))) %>%
+  arrange(alpha, predictor, outcome, r)
+
+```
+
+
+```{r}
+min_r_80 <- power_results_long %>%
+  filter(predictor %in% pred_vars,
+         outcome %in% out_vars,
+         power >= 0.80) %>%
+  group_by(predictor, outcome, alpha) %>%
+  slice_min(order_by = abs(r), n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(
+    r_label = paste0("r = ", round(r, 2)))
+
+min_r_80 <- min_r_80 %>%
+  mutate(
+    alpha = factor(alpha,
+                   levels = c(0.05, 0.025, 0.01, 0.001),
+                   labels = c("α = 0.05", "α = 0.025", 
+                              "α = 0.01","α = 0.001")))
+
+
+ggplot(plot_dat, aes(x = r, y = power, color = outcome)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 0.2, alpha = 0.6) +
+  geom_hline(yintercept = 0.80, linetype = "dashed", color = "grey40") +
+
+  geom_vline(
+    data = min_r_80,
+    aes(xintercept = r, color = outcome),
+    linetype = "dotted",
+    linewidth = 0.8,
+    show.legend = FALSE) +
+
+  geom_text(
+    data = min_r_80,
+    aes(x = r-0.027, y = 0.25, label = r_label, color = outcome),
+    angle = 90,
+    hjust = 0.5,
+    vjust = 1,
+    size = 3,
+    show.legend = FALSE) +
+
+  facet_grid(
+    alpha ~ predictor,
+    labeller = labeller(
+      predictor = c(
+        IL_6 = "IL-6",
+        MCP_1 = "MCP-1"))) +
+  scale_color_manual(
+    values = c(
+      "CORT_CNG3" = "steelblue",
+      "CVLT_CNG3" = "firebrick"),
+    labels = c(
+      "CORT_CNG3" = "CORTΔ",
+      "CVLT_CNG3" = "CVLTΔ")) +
+  scale_x_continuous(breaks = seq(-1, 1, by = 0.1)) +
+  labs(
+    x = "Assumed correlation (pilot estimate ±0.25)",
+    y = "Power",
+    color = "Outcome",
+    title = "Power curves for inflammatory marker–outcome associations",
+    subtitle = "Dotted lines show the minimum correlation reaching 80% power") +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_bw() +
+  theme(
+    panel.spacing = unit(1.5, "lines"),
+    legend.position = "bottom")
+```
+How large the correlation between an inflammatory marker and outcome decline must be to achieve 80% power under different significance thresholds (α) for sample size 175. Power decreases
+toward zero because weaker associations are harder to detect.
+
+
+
+
+
+```{r}
+# choose a reasonable range of corr to test for power
+r_grid <- seq(0.10, 0.35, by = 0.05)
+
+# planned sample size
+N_final <- 175
+
+# power for one-sample correlation test across the range
+# H0: rho = 0
+power_results <- map_dfr(r_grid, function(r) {
+  out <- corr.1samp(
+    n = N_final,
+    rho = r,
+    alpha = 0.05,
+    power = NULL,
+    alternative = "two.sided")
+
+  tibble(
+    r = r,
+    power = out$power)
+  })
+
+print(power_results)
+
+```
+
+Example interpretation:
+Preliminary data were used to estimate correlations between inflammatory markers and outcome change scores. Because outcomes were defined as baseline minus year-1 values, greater inflammation is expected to be associated with greater decline, corresponding to negative correlations. Power analyses therefore evaluated a range of plausible negative correlations informed by the preliminary estimates.
+
+
+## Aim 2 Power Analysis
+
+Does AD deposition modify the association between inflammation and 1-year decline?
+* Specifically, patients with greater amyloid accumulation and elevated inflammation will show the greatest decline in memory and AD-signature cortical thickness.
+
+For Aim 2, power calculations will evaluate the incremental variance explained by the inflammation × AD pathology interaction in covariate-adjusted linear regression models. Because the primary hypothesis concerns the added contribution of the interaction term beyond the main effects and covariates, power will be assessed using a partial multiple-regression F-test framework.
+
+For Aim 2, amyloid deposition will be operationalized as amyloid positive versus amyloid negative based on established Florbetapir PET cutoffs (global SUVR threshold 1.10). This approach is consistent with the grant’s stated alternative analytic strategy and provides a more feasible and interpretable framework for power analysis than modeling an interaction between two continuous variables. We will test whether the association between inflammation and 1-year change in outcomes differs by amyloid status by fitting change-score regression models including inflammation, amyloid group, and their interaction term.
+
+For Aim 2, power calculations will evaluate the incremental effect of the inflammation × amyloid-status interaction in linear regression models for 1-year change outcomes. Because amyloid will be treated as a dichotomous PET-based variable, this provides a more feasible approximation of the proposed moderation hypothesis than a continuous-by-continuous interaction.
+
+For Aim 2, power will be evaluated for the added inflammation × amyloid-status interaction term using mlrF.partial, with the reduced model including inflammation, amyloid group, age, sex, CDR, and APOE genotype, and the full model additionally including the interaction term.
+
+```{r}
+library(powertools)
+library(dplyr)
+library(purrr)
+library(tibble)
+
+# Planned final sample size
+N <- 175
+
+# Number of predictors in full model:
+# inflammation + amyloid group + interaction + covariates
+# Example: age, sex, CDR, APOE = 4 covariates
+# Total full-model predictors = 1 + 1 + 1 + 4 = 7
+u <- 1                 # numerator df for the interaction term
+p_full <- 7            # full model predictors, excluding intercept
+v <- N - p_full - 1    # denominator df
+
+# plausible interaction sizes as partial R^2
+partial_r2_grid <- c(0.01, 0.02, 0.03, 0.05)
+
+# convert to f^2
+f2_grid <- partial_r2_grid / (1 - partial_r2_grid)
+
+alpha_grid <- c(0.05, 0.025, 0.01, 0.001)
+
+aim2_power <- tidyr::crossing(
+  partial_r2 = partial_r2_grid,
+  f2 = f2_grid,
+  alpha = alpha_grid) %>%
+  mutate(
+    power = map2_dbl(f2, alpha, \(ff2, aa)
+      powertools::mlrF.partial(
+        u = u,
+        v = v,
+        f2 = ff2,
+        alpha = aa
+      )))
+
+aim2_power
+```
+
+```{r}
+aim2_min_effect <- aim2_power %>%
+  filter(power >= 0.80) %>%
+  group_by(alpha) %>%
+  slice_min(partial_r2, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+aim2_min_effect
+```
+
+
+
+```{r}
+
+ggplot(aim2_power, aes(x = partial_r2, y = power, color = factor(alpha))) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 0.80, linetype = "dashed", color = "grey40") +
+  labs(
+    x = "Assumed partial R² for inflammation × amyloid interaction",
+    y = "Power",
+    color = expression(alpha),
+    title = "Aim 2 interaction power") +
+  theme_bw()
+```
+
+
+
+
+
+
+
+
