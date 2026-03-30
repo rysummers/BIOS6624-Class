@@ -355,7 +355,7 @@ final_table <- dplyr::bind_rows(
 final_table
 ```
 
-```{r}
+```{r label="Table used in final report (Table 1)"}
 
 gt_power_table <- final_table %>%
   gt(rowname_col = "correlation") %>%
@@ -430,21 +430,7 @@ gt_power_table <- final_table %>%
 gt_power_table
 ```
 
-
-Example interpretation:
-Preliminary data were used to estimate correlations between inflammatory markers and outcome change scores. Because outcomes were defined as baseline minus year-1 values, greater inflammation is expected to be associated with greater decline, corresponding to negative correlations. Power analyses therefore evaluated a range of plausible negative correlations informed by the preliminary estimates.
-
-
 ## Aim 2 Power Analysis
-
-Does AD deposition modify the association between inflammation and 1-year change?
-* Specifically, patients with greater amyloid accumulation and elevated inflammation will show the greatest decline in memory and AD-signature cortical thickness.
-
-For Aim 2, amyloid deposition will be operationalized as amyloid positive versus amyloid negative based on established Florbetapir PET cutoffs (global SUVR threshold 1.10). This approach is consistent with the grant’s stated alternative analytic strategy and provides a more feasible and interpretable framework for power analysis than modeling an interaction between two continuous variables. We will test whether the association between inflammation and 1-year change in outcomes differs by amyloid status by fitting change-score regression models including inflammation, amyloid group, and their interaction term.
-
-For Aim 2, power calculations will evaluate the incremental effect of the inflammation x amyloid-status interaction in linear regression models for 1-year change outcomes. Because amyloid will be treated as a dichotomous PET-based variable, this provides a more feasible approximation of the proposed moderation hypothesis than a continuous-by-continuous interaction.
-
-For Aim 2, power will be evaluated for the added inflammation × amyloid-status interaction term using mlrF.partial, with the reduced model including inflammation, amyloid group, age, sex, CDR, and APOE genotype, and the full model additionally including the interaction term.
 
 ```{r}
 ## number of predictors in full model:
@@ -601,12 +587,6 @@ sidak(alpha = 0.05, m = 20)
 0.05/20
 ```
 
-We assumed no association in the low-amyloid group and a stronger negative association in the high-amyloid group, then evaluated power across plausible effect sizes and amyloid group ratios.
-
-Fo Aim 2, power was evaluated using a two-sample correlation framework comparing low- and high-amyloid groups. For simplicity, we assumed no association between inflammation and outcome change in the low-amyloid group and a stronger negative association in the high-amyloid group. Power was then examined across a range of plausible correlations in the high-amyloid group and across different ratios of amyloid-positive to amyloid-negative participants.
-
-what analysis would we perform to test for confounders (mediator) vs precision variables
-sensitivity analysis for any potential confounders
 
 ```{r}
 N_total <- 175
@@ -667,7 +647,7 @@ for (rho_low in rho_low_grid) {
 ```
 
 
-```{r}
+```{r label="Figure used in final report (Figure 1)"}
 # better labels for facet grid
 # aim2_corr2samp_results$pos_label <- paste0(
 # "Amyloid+ : ", aim2_corr2samp_results$n_high)
@@ -833,18 +813,7 @@ ggplot(aim2_ipower,
 ```
 
 
-
-Power analyses suggest that the proposed sample size is likely adequate for detecting moderate interaction effects in Aim 2, but may be underpowered for small interaction effects. Thus, the current design appears more suitable for detecting relatively strong inflammation × amyloid effects than subtle moderation effects.
-
-
-A useful way to think about it is to square them:
-	*	0.21^2 $\approx$ 0.044
-	*	0.31^2 $\approx$ 0.096
-
-So your Aim 2 power plot is saying you’d need the interaction to explain roughly 4% to 10% of residual outcome variance after accounting for the other predictors in the model. For an interaction, that is not small. In many biomedical regression settings, interaction effects are weaker than main effects, often closer to the small range.
-
-
-### Summary of Analyses
+### Summary of Analyses (Used in final report)
 
 | Aim | Hypothesis | Primary Outcome                                                                | Primary Exposure                                     | Covariates                                              |
 | -- | ---------- | ------------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------- |
@@ -852,13 +821,5 @@ So your Aim 2 power plot is saying you’d need the interaction to explain rough
 | 1  | H1b        | Same outcomes                                                                  | Change in inflammatory markers (baseline → year-1)   | Baseline age, sex, baseline outcome, and baseline inflammatory marker level |
 | 2  | H2         | Same outcomes                                                                  | baseline Inflammation × baseline amyloid interaction          | Same as H1b |
 
-Each hypothesis family will first be evaluated with a prespecified omnibus/global test at two-sided α = 0.05. If significant, follow-up pairwise models will be interpreted using Holm-adjusted inference within that family.
-
-To address multiplicity prospectively, analyses will be organized into prespecified hypothesis families corresponding to H1a, H1b, and Aim 2. Within each family, the family-wise type I error rate will be controlled at two-sided α = 0.05 using the Holm sequential procedure. For sample size estimation, conservative power calculations will be based on the Bonferroni-equivalent threshold for the number of tests in each family, while final inference will use the prespecified Holm procedure, which provides greater power than simple Bonferroni adjustment.
-
-To address multiplicity prospectively, analyses will be organized into prespecified hypothesis families corresponding to H1a, H1b, and Aim 2. Within each family, the family-wise type I error rate will be controlled at two-sided α = 0.05 using the Holm's step-down procedure. For power estimation, we will evaluate a range of significance thresholds to reflect uncertainty in the effective number of correlated tests within each family. Specifically, power will be examined under the conservative Bonferroni threshold based on the full number of planned tests in the family (5 outcomes x 4 markers = 20), as well as under less conservative thresholds reflecting plausible reductions in the effective number of tests due to correlation among inflammatory markers and outcomes. This range will include the most conservative threshold and selected intermediate values to provide lower- and upper-bound estimates of detectable effect sizes.
-
-Because preliminary analyses indicate non-independence among several predictors and outcomes, the nominal number of model tests likely overstates the number of statistically independent pieces of information. Therefore, a Bonferroni correction based on the full cross-product of predictors and outcomes would likely be overly conservative
-
-the true effective multiplicity burden is likely between the extreme cases of complete independence and complete redundancy.
+licity burden is likely between the extreme cases of complete independence and complete redundancy.
 
