@@ -286,7 +286,7 @@ ggplot(aim1_plot_dat, aes(x = r, y = power, color = outcome)) +
 
 ```{r}
 r_grid <- seq(-0.5, -0.2, by = 0.01)
-alpha_grid <- c(0.01, 0.005, 0.0025)
+alpha_grid <- c(0.05/4, 0.05/10, 0.05/20)
 
 aim1_power_full <- data.frame()
 
@@ -324,8 +324,8 @@ aim1_power_table <- aim1_power_full %>%
 min_r_80_row <- min_r_80 %>%
   dplyr::mutate(
     alpha = dplyr::case_when(
-      alpha == 0.01   ~ "α = 0.05/5",
-      alpha == 0.005  ~ "α = 0.05/10",
+      alpha == 0.0125 ~ "α = 0.05/4",
+      alpha == 0.005 ~ "α = 0.05/10",
       alpha == 0.0025 ~ "α = 0.05/20"),
     value = round(abs(r)*100, 1)) %>%
   dplyr::select(alpha, value) %>%
@@ -333,13 +333,13 @@ min_r_80_row <- min_r_80 %>%
     names_from = alpha,
     values_from = value) %>%
   mutate(correlation = "Min |r| for 80% power") %>%
-  dplyr::select(correlation, `α = 0.05/5`, `α = 0.05/10`, `α = 0.05/20`)
+  dplyr::select(correlation, `α = 0.05/4`, `α = 0.05/10`, `α = 0.05/20`)
 
 aim1_power_table_wide <- aim1_power_table %>%
   mutate(
     correlation = sprintf("%.2f", abs(r)),
     alpha = case_when(
-      alpha == 0.01   ~ "α = 0.05/5",
+      alpha == 0.0125 ~ "α = 0.05/4",
       alpha == 0.005  ~ "α = 0.05/10",
       alpha == 0.0025 ~ "α = 0.05/20"),
     power = round(power * 100, 1)) %>%
@@ -366,7 +366,7 @@ gt_power_table <- final_table %>%
   tab_stubhead(label = md("**Assumed |r|**")) %>%  # Add this line
   cols_label(
     correlation = "Assumed |r|",
-    `α = 0.05/5`   = md("**α = 0.05/5**"),
+    `α = 0.05/4`   = md("**α = 0.05/4**"),
     `α = 0.05/10`  = md("**α = 0.05/10**"),
     `α = 0.05/20` = md("**α = 0.05/20**")) %>%
   
@@ -385,25 +385,7 @@ gt_power_table <- final_table %>%
     style = list(cell_text(weight = "bold")),
     locations = cells_body(
       rows = correlation == "Min |r| for 80% power",
-      columns = c(`α = 0.05/5`, `α = 0.05/10`, `α = 0.05/20`))) %>%
-  # Add separation with a border above the special row
-  # tab_style(
-  #   style = list(cell_borders(
-  #     sides = "top",
-  #     color = "black",
-  #     weight = px(3),
-  #     style = "double")),
-  # locations = cells_body(
-  #   rows = correlation == "Min |r| for 80% power",
-  #   columns = everything())) %>%
-  # tab_style(
-  #   style = list(cell_borders(
-  #     sides = "top",
-  #     color = "black",
-  #     weight = px(3),
-  #     style = "double")),
-  # locations = cells_stub(
-  #   rows = correlation == "Min |r| for 80% power")) %>%
+      columns = c(`α = 0.05/4`, `α = 0.05/10`, `α = 0.05/20`))) %>%
   
   # Add these tab_style calls for background highlighting
   tab_style(
@@ -429,12 +411,13 @@ gt_power_table <- final_table %>%
       rows = correlation == "Min |r| for 80% power")) %>%
   
   tab_spanner(label = md("**Power (%)**"),
-              columns = c(`α = 0.05/5`, `α = 0.05/10`, `α = 0.05/20`)) %>% 
+              columns = c(`α = 0.05/4`, `α = 0.05/10`, `α = 0.05/20`)) %>% 
   tab_source_note(
     source_note = md(
       "Minimum detectable correlation corresponds to the smallest absolute 
       correlation achieving at least 80% power.")) %>%
   tab_options(
+    table.width = pct(65),
     table.border.left.style = "none",
     table.border.right.style = "none",
     stub.border.style = "none",
@@ -541,38 +524,6 @@ aim2_min_pc_80_labels <- aim2_min_pc_80 %>%
 ```
 
 
-```{r}
-ggplot(aim2_plot_dat, aes(x = pc, y = power, color = alpha)) +
-  geom_line(linewidth = 0.8) +
-  geom_point(size = 1.2) +
-  geom_hline(yintercept = 0.80, linetype = "dashed", color = "grey40") +
-  geom_vline(
-    data = aim2_min_pc_80,
-    aes(xintercept = pc, color = alpha),
-    linetype = "dotted",
-    linewidth = 0.8,
-    show.legend = F) +
-  geom_text(
-    data = aim2_min_pc_80_labels,
-    aes(x = label_x, y = label_y, label = pc_label, color = alpha),
-    size = 3.5,
-    show.legend = F) +
-  scale_color_manual(
-    values = c("α = 0.05" = "steelblue", "α = 0.01" = "darkorchid",
-      "α = 0.005" = "goldenrod3", "α = 0.0025" = "firebrick")) +
-  labs(
-    x = "Assumed partial correlation for inflammation × amyloid interaction",
-    y = "Power",
-    color = expression(alpha),
-    title = "Aim 2 power for the interaction effect at N = 175",
-    subtitle = "Dotted lines show the minimum partial correlation reaching 80% power") +
-  coord_cartesian(ylim = c(0, 1)) +
-  theme_bw() +
-  theme(
-    panel.spacing = unit(1.5, "lines"),
-    legend.position = "bottom")
-```
-
 Change correlation direction to match Aim1 to be consistent
 ```{r}
 aim2_plot_dat2 <- aim2_pwr_results %>%
@@ -659,120 +610,7 @@ sensitivity analysis for any potential confounders
 
 ```{r}
 N_total <- 175
-alpha_grid <- c(0.01, 0.005, 0.0025)
-
-## low amyloid group will be assumed to have no correlation **strong assumption**
-rho_low <- 0
-
-## plausible high-amyloid correlations
-rho_high_grid <- seq(-0.70, -0.1, by = 0.01)
-#rho_high_grid <- seq(0.10, 0.7, by = 0.01)
-
-## ratio = n_high / n_low
-nratio_grid <- c(1, 0.75, 0.5, 0.33333)
-
-aim2_corr2samp_results <- data.frame()
-
-for (a in alpha_grid) {
-  for (rho_high in rho_high_grid) {
-    for (nr in nratio_grid) {
-
-      ## group 1 = low amyloid, group 2 = high amyloid
-      n_low  <- floor(N_total / (1 + nr))
-      n_high <- N_total - n_low
-
-      pwr_obj <- powertools::corr.2samp(
-        n1 = n_low, # low amyloid group ssize
-        n.ratio = n_high / n_low, 
-        rho1 = rho_low,
-        rho2 = rho_high,
-        alpha = a,
-        sides = 2)
-
-      power_val <- if (is.list(pwr_obj) && "power" %in% names(pwr_obj)) {
-        pwr_obj$power
-        } else {
-        as.numeric(pwr_obj)
-          }
-
-      aim2_corr2samp_results <- rbind(
-        aim2_corr2samp_results,
-        data.frame(
-          alpha = a,
-          rho_low = rho_low,
-          rho_high = rho_high,
-          n_low = n_low,
-          n_high = n_high,
-          n_ratio = n_high / n_low,
-          power = power_val))
-    }
-  }
-  }
-```
-
-
-```{r}
-N_total <- 175
-alpha_grid <- c(0.01, 0.005, 0.0025)
-
-## low amyloid group: small plausible correlations
-rho_low_grid <- c(-0.10, -0.20, -0.30)
-
-## plausible high-amyloid correlations
-rho_high_grid <- seq(-0.70, -0.10, by = 0.01)
-
-## ratio = n_high / n_low
-nratio_grid <- c(1, 0.75, 0.5, 0.33333)
-
-aim2_corr2samp_results <- data.frame()
-
-for (a in alpha_grid) {
-  for (rho_low in rho_low_grid) {
-    for (rho_high in rho_high_grid) {
-      for (nr in nratio_grid) {
-
-        ## optional: only keep scenarios where high-amyloid association
-        ## is stronger in magnitude than low-amyloid association
-        if (abs(rho_high) <= abs(rho_low)) next
-
-        ## group 1 = low amyloid, group 2 = high amyloid
-        n_low  <- floor(N_total / (1 + nr))
-        n_high <- N_total - n_low
-
-        pwr_obj <- powertools::corr.2samp(
-          n1      = n_low,
-          n.ratio = n_high / n_low,
-          rho1    = rho_low,
-          rho2    = rho_high,
-          alpha   = a,
-          sides   = 2)
-
-        power_val <- if (is.list(pwr_obj) && "power" %in% names(pwr_obj)) {
-          pwr_obj$power
-          } else {
-          as.numeric(pwr_obj)
-            }
-
-        aim2_corr2samp_results <- rbind(
-          aim2_corr2samp_results,
-          data.frame(
-            alpha    = a,
-            rho_low  = rho_low,
-            rho_high = rho_high,
-            n_low    = n_low,
-            n_high   = n_high,
-            n_ratio  = n_high / n_low,
-            power    = power_val))
-      }
-    }
-  }
-  }
-```
-
-
-```{r}
-N_total <- 175
-alpha <- 0.01  # single alpha
+alpha <- 0.05/4  # assuming 4 independent tests
 
 ## low amyloid group: small plausible correlations
 #rho_low_grid <- c(-0.10, -0.20, -0.30)
@@ -780,10 +618,10 @@ rho_low_grid <- c(0.10, 0.20, 0.30)
 
 ## plausible high-amyloid correlations
 #rho_high_grid <- seq(-0.70, -0.10, by = 0.01)
-rho_high_grid <- seq(0.10, 0.7, by = 0.01)
+rho_high_grid <- seq(0.20, 0.8, by = 0.01)
 
 ## ratio = n_high / n_low
-nratio_grid <- c(1, 0.75, 0.5, 0.33333)
+nratio_grid <- c(1, 0.75, 0.5, 0.25)
 
 aim2_corr2samp_results <- data.frame()
 
@@ -791,27 +629,27 @@ for (rho_low in rho_low_grid) {
   for (rho_high in rho_high_grid) {
     for (nr in nratio_grid) {
 
-      ## ensure high-amyloid effect is stronger
+      ## ensure analysis only considers cases where
+      ## |rho_high| > |rho_low|
       if (abs(rho_high) <= abs(rho_low)) next
 
       ## group sizes
       n_low  <- floor(N_total / (1 + nr))
       n_high <- N_total - n_low
 
-      pwr_obj <- powertools::corr.2samp(
+      pwr_obj <- corr.2samp(
         n1      = n_low,
         n.ratio = n_high / n_low,
         rho1    = rho_low,
         rho2    = rho_high,
         alpha   = alpha,
-        sides   = 2
-      )
+        sides   = 2)
 
       power_val <- if (is.list(pwr_obj) && "power" %in% names(pwr_obj)) {
         pwr_obj$power
-      } else {
-        as.numeric(pwr_obj)
-      }
+        } else {
+          as.numeric(pwr_obj)
+          }
 
       aim2_corr2samp_results <- rbind(
         aim2_corr2samp_results,
@@ -822,12 +660,10 @@ for (rho_low in rho_low_grid) {
           n_low    = n_low,
           n_high   = n_high,
           n_ratio  = n_high / n_low,
-          power    = power_val
-        )
-      )
+          power    = power_val))
     }
   }
-}
+  }
 ```
 
 
@@ -864,7 +700,7 @@ annot_df <- aim2_corr2samp_results %>%
   group_by(rho_low) %>%
   arrange(desc(n_high)) %>%
   mutate(
-    x = 0.1,
+    x = 0.2,
     y = seq(0.30, 0.50, length.out = n())) %>%
   ungroup()
 
@@ -881,12 +717,12 @@ ggplot(aim2_corr2samp_results,
     labeller = labeller(
       rho_low = function(x) paste0("Amyloid Neg- (r = ", x, ")"))) +
   scale_x_continuous("Correlation in Amyloid + group",
-                     breaks = seq(-1, 1, by = 0.1))  +
+                     breaks = seq(0.2, 1, by = 0.1))  +
   scale_y_continuous("Power", limits = c(0, 1)) +
   scale_color_discrete(name = "Amyloid Pos+ (N)") +
     labs(
     title = "Aim 2 Power for the Interaction Effect at N = 175",
-    subtitle = expression(paste("Text labels show min correlation required to achieve 80% power at ", alpha, "=0.01"))) +
+    subtitle = expression(paste("Text labels show min correlation required to achieve 80% power at ", alpha, "=0.05/4 in Amyloid +"))) +
   theme_bw() +
   theme(legend.position = "bottom")
 ```
@@ -1012,8 +848,8 @@ So your Aim 2 power plot is saying you’d need the interaction to explain rough
 
 | Aim | Hypothesis | Primary Outcome                                                                | Primary Exposure                                     | Covariates                                              |
 | -- | ---------- | ------------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------- |
-| 1  | H1a        | 1-yr Δ in CVLT, Benson Figure, MST, and Store Recall (continuous cognitive measures); <br>1-yr Δ in AD-signature cortical thickness (continuous) | Baseline inflammatory markers (continuous cytokines: IL-6, TNF-α, continuous chemokines:MCP-1, Eotaxin-1) | Baseline age, sex, APOE genotype, CDR, & baseline outcome |
-| 1  | H1b        | Same outcomes                                                                  | Change in inflammatory markers (baseline → year-1)   | Baseline age, sex, APOE genotype, baseline CDR, baseline outcome, and baseline inflammatory marker level |
+| 1  | H1a        | 1-yr Δ in CVLT, Benson Figure, MST, and Store Recall (continuous cognitive measures); <br>1-yr Δ in AD-signature cortical thickness (continuous) | Baseline inflammatory markers (continuous cytokines: IL-6, TNF-α, continuous chemokines:MCP-1, Eotaxin-1) | Baseline age, sex, & baseline outcome |
+| 1  | H1b        | Same outcomes                                                                  | Change in inflammatory markers (baseline → year-1)   | Baseline age, sex, baseline outcome, and baseline inflammatory marker level |
 | 2  | H2         | Same outcomes                                                                  | baseline Inflammation × baseline amyloid interaction          | Same as H1b |
 
 Each hypothesis family will first be evaluated with a prespecified omnibus/global test at two-sided α = 0.05. If significant, follow-up pairwise models will be interpreted using Holm-adjusted inference within that family.
