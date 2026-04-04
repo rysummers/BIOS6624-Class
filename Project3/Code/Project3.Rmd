@@ -1,0 +1,400 @@
+---
+title: 'BIOS 6624: Project 3'
+author: "Ryan Summers"
+date: "2026-04-01"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(dplyr)
+library(purrr)
+library(tibble)
+library(tidyr)
+library(broom)
+library(gt)
+library(gtsummary)
+library(survival)
+library(survminer)
+
+```
+
+## Load Data
+
+```{r}
+fmhst_raw <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project3/DataRaw/frmgham2.csv")
+```
+
+## Data Management & Cleanup
+
+Remove subjects who had event (stroke) at baseline and Filter to 10yrs cutoff.
+Calculate censored indicator if event doesn't happen within 10yrs and calculate
+time to censoring variable.
+
+```{r}
+cutoff_days <- 10*365.25
+
+fmhst_filt <- fmhst_raw %>% 
+  # remove subjects who had event prior to baseline assessment
+  filter(PERIOD == 1, PREVSTRK == 0) %>%   # baseline cohort
+  mutate(
+    # time to event or being censored truncated at 10 years
+    TIMESTRKorCENS_10y = pmin(TIMESTRK, cutoff_days),
+
+    # event indicator within 10 years
+    STROKE_10y = if_else(STROKE == 1 & TIMESTRK <= cutoff_days, 1, 0),
+    
+    ## all censored subjects
+    ## **TIMESTRK includes censored participants if STROKE==0**
+    CENSORED_10y = if_else(STROKE_10y == 0, 1, 0),
+    
+    # convert variables to factors
+    SEX = factor(SEX, levels = c(1,2), labels = c("Men", "Women")),
+    DIABETES = factor(DIABETES, levels = c(0,1), labels = c("No", "Yes")),
+    PREVCHD = factor(PREVCHD, levels = c(0,1), labels = c("No", "Yes")),
+    BPMEDS = factor(BPMEDS, levels = c(0,1), labels = c("No", "Yes")),
+    CURSMOKE = factor(CURSMOKE, levels = c(0,1), labels = c("No", "Yes")),
+    STROKE_10y = factor(STROKE_10y, levels = c(0,1), labels = c("No-Censored", "Yes")),
+    STROKE_bin = ifelse(STROKE_10y == "Yes", 1, 0),
+    CENSORED_10y = factor(CENSORED_10y, levels = c(0, 1), labels = c("No", "Yes")),
+    TIMESTRKorCENS_10y_yrs = TIMESTRKorCENS_10y/365.25,
+    )
+```
+
+We restricted the primary analysis to baseline risk factors measured at period 1 and 
+modeled incident stroke over the first 10 years of follow-up. This approach aligns 
+predictor measurement more closely with the risk window of interest. We additionally 
+examined how major risk factors changed across the three examination periods to assess whether a time-varying covariate analysis might be informative. If risk factors change materially over time, 
+a baseline-only model may understate or misclassify the relationship between current 
+risk-factor status and stroke hazard. However, time-varying covariate analyses in 
+observational data may also be harder to interpret because updated covariates can be
+influenced by treatment changes and evolving disease status.
+
+## Exploratory Data Analysis (EDA)
+
+### Table1
+
+```{r label = "Used in final report as Table 1"}
+tbl1 <- fmhst_filt %>%
+  tbl_summary(
+    by = SEX,
+    include = c(
+      AGE, SYSBP, DIABETES, TOTCHOL, PREVCHD, BPMEDS, CURSMOKE,
+      BMI, STROKE_10y),
+    type = list(
+      all_continuous() ~ "continuous2",
+      all_categorical() ~ "categorical"),
+    statistic = list(
+      all_continuous() ~ c(
+        "{mean} ({sd})",
+        "{median} ({p25}, {p75})",
+        "{min} - {max}"),
+      all_categorical() ~ "{n} ({p}%)"),
+    digits = list(AGE ~ 0, SYSBP ~ 0),
+    missing = "ifany",
+    missing_text = "NA",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+      AGE ~ "Age",
+      SYSBP ~ "Systolic BP",
+      DIABETES ~ "Diabetes",
+      TOTCHOL ~ "Total Cholesterol (mg/dL)",
+      PREVCHD ~ "Prevalent Coronary Heart Disease",
+      BPMEDS ~ "BP Meds",
+      CURSMOKE ~ "Smoker",
+      STROKE_10y ~ "Event (Stroke)")) %>%
+  add_overall() %>% bold_labels() %>% italicize_levels() %>% add_n() %>%
+  as_gt() %>%
+  gt::fmt_markdown(columns = everything()) %>%
+  tab_header(
+    title = "Characteristics of the Framingham Heart Study Cohort") %>% 
+  tab_options(
+    table.width = pct(70),
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+tbl1
+```
+
+```{r}
+# number of participants
+cat("Number of participants in entire cohort", 
+   length(unique(fmhst_raw$RANDID)), "\n\n")
+
+cat("Number of participants in 10yr subset cohort", 
+   length(unique(fmhst_filt$RANDID)), "\n\n")
+```
+
+
+```{r}
+hist(fmhst_filt$TOTCHOL)
+```
+
+
+STROKE indicator is 0 but there's a time to stroke value????
+```{r}
+fmhst_filt %>% 
+  filter(STROKE==0 & TIMESTRK <= 10*365.25) %>% 
+  select(c(1,24,29,), 36:43)
+```
+
+```{r}
+# crude incidence
+fmhst_filt %>%
+  group_by(SEX) %>%
+  summarise(
+    events = sum(STROKE_10y == "Yes"),
+    total = n(),
+    risk = round( (events / total)*100,1 ))
+```
+
+### Kaplan-Meier Curve
+```{r}
+km.fit <- survfit(Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ BPMEDS, 
+                  data = fmhst_filt)
+
+ggsurvplot(km.fit,
+           conf.int = F,
+           risk.table = T,
+           ylim = c(0.97,1),
+           xlab = "Time (Days)",
+           ylab = "Stroke-free probability",
+           tables.height = 0.2,
+           tables.theme = theme_cleantable(),
+            # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+           # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+           palette = c("#E7B800", "#2E9FDF"),
+           ggtheme = theme_bw() )
+           
+```
+
+```{r}
+
+# create grouped versions of variables
+fmhst_plot <- fmhst_filt %>%
+  mutate(
+    SBP_cat = if_else(SYSBP >= 140, "BP≥140", "BP<140"),
+    AGE_cat = if_else(AGE >= 60, "Age≥60", "Age<60"),
+    TOTCHOL_cat = if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
+    BMI_cat = if_else(BMI >= 30, "BMI≥30", "BMI<30")
+    ) %>%
+  select(TIMESTRKorCENS_10y, STROKE_10y, SBP_cat, DIABETES, PREVCHD, AGE_cat) %>%
+  pivot_longer(
+    cols = -c(TIMESTRKorCENS_10y, STROKE_10y),
+    names_to = "variable",
+    values_to = "group") %>% 
+    mutate(
+    variable = factor(variable,
+      levels = c("AGE_cat", "SBP_cat", "DIABETES", "PREVCHD"),
+      labels = c("Age", "Systolic BP", "Diabetes", "Prior CHD")
+    ))
+
+# fit survival object
+fit <- survfit(Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ group + variable, 
+  data = fmhst_plot)
+
+# plot
+p <- ggsurvplot_facet(
+  fit,
+  data = fmhst_plot,
+  facet.by = "variable",
+  conf.int = FALSE,
+  ylim = c(0.97,1),
+  xlab = "Time (Days)",
+  ylab = "Stroke-free probability",
+  ggtheme = theme_bw())
+
+p + theme(legend.position = "bottom")
+
+```
+
+```{r}
+
+# create grouped versions of variables
+fmhst_plot2 <- fmhst_filt %>%
+  mutate(
+    SBP_cat = if_else(SYSBP >= 140, "BP≥140", "BP<140"),
+    AGE_cat = if_else(AGE >= 60, "Age≥60", "Age<60"),
+    TOTCHOL_cat = if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
+    BMI_cat = if_else(BMI >= 30, "BMI≥30", "BMI<30")
+    ) %>%
+  select(TIMESTRKorCENS_10y, STROKE_10y, TOTCHOL_cat, BMI_cat, BPMEDS, CURSMOKE) %>%
+  pivot_longer(
+    cols = -c(TIMESTRKorCENS_10y, STROKE_10y),
+    names_to = "variable",
+    values_to = "group") %>% 
+    mutate(
+    variable = factor(variable,
+      levels = c("TOTCHOL_cat", "BMI_cat", "BPMEDS", "CURSMOKE"),
+      labels = c("Total Chol", "BMI", "BP Meds", "Smoker")
+    ))
+
+# fit survival object
+fit2 <- survfit(Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ group + variable, 
+  data = fmhst_plot2)
+
+# plot
+p2 <- ggsurvplot_facet(
+  fit2,
+  data = fmhst_plot2,
+  facet.by = "variable",
+  conf.int = FALSE,
+  ylim = c(0.97,1),
+  xlab = "Time (Days)",
+  ylab = "Stroke-free probability",
+  ggtheme = theme_bw())
+
+p2 + theme(legend.position = "bottom")
+
+```
+
+
+
+### Distributions of Time to Event by Sex
+
+```{r}
+# time-to-event variables and labels
+# time_vars <- c(
+#   TIMEHYP  = "Days Baseline-Inc Hypertension",
+#   TIMEAP   = "Days Baseline-Inc Angina",
+#   TIMEMI   = "Days Baseline-Inc Hosp MI",
+#   TIMEMIFC = "Days Baseline-Inc MI-Fatal CHD",
+#   TIMESTRK = "Days Baseline-Inc Stroke",
+#   TIMECHD  = "Days Baseline-Inc Any CHD",
+#   TIMECVD  = "Days Baseline-Inc CVD",
+#   TIMEDTH  = "Days Baseline-Death")
+
+time_vars <- c(TIMESTRKorCENS_10y = "Follow-up time (days)")
+
+# build summary table
+time_tbl <- fmhst_filt %>%
+  group_by(SEX) %>%
+  summarise(
+    `Time to Event` = "Follow-up time (days)",
+    N = sum(!is.na(TIMESTRKorCENS_10y)),
+    NMiss = sum(is.na(TIMESTRKorCENS_10y)),
+    Mean = mean(TIMESTRKorCENS_10y, na.rm = TRUE),
+    Std = sd(TIMESTRKorCENS_10y, na.rm = TRUE),
+    Min = min(TIMESTRKorCENS_10y, na.rm = TRUE),
+    P25 = quantile(TIMESTRKorCENS_10y, 0.25, na.rm = TRUE),
+    Median = median(TIMESTRKorCENS_10y, na.rm = TRUE),
+    P75 = quantile(TIMESTRKorCENS_10y, 0.75, na.rm = TRUE),
+    Max = max(TIMESTRKorCENS_10y, na.rm = TRUE),
+    .groups = "drop") %>%
+  # indent labels within sex groups
+  mutate(SEX = if_else(duplicated(SEX), "", as.character(SEX))) %>%
+  gt(groupname_col = "SEX") %>%
+  tab_header(title = "Distributions of Time to Event by Sex") %>%
+  cols_label(
+    `Time to Event` = "Time to Event",
+    N = "N",
+    NMiss = "NMiss",
+    Mean = "Mean",
+    Std = "Std",
+    Min = "Min",
+    P25 = "P25",
+    Median = "Median",
+    P75 = "P75",
+    Max = "Max") %>%
+  fmt_number(
+    columns = c(Mean, Std, Min, P25, Median, P75, Max),
+    decimals = 0) %>%
+  cols_align(
+    align = "left",
+    columns = c(`Time to Event`)) %>%
+  cols_align(
+    align = "center",
+    columns = c(N, NMiss, Mean, Std, Min, P25, Median, P75, Max)) %>%
+  tab_options(
+    table.font.size = px(16),
+    heading.align = "left",
+    data_row.padding = px(6),
+    row_group.font.weight = "normal",
+    column_labels.font.weight = "normal",
+    table.border.top.width = px(1),
+    table.border.bottom.width = px(1))
+
+time_tbl
+```
+
+
+## Primary Analysis
+```{r}
+cox.male.model <- coxph(
+  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP + DIABETES +  
+  TOTCHOL + BMI + CURSMOKE + BPMEDS + PREVCHD, 
+                   data = subset(fmhst_filt, SEX == "Men"))
+summary(cox.male.model)
+```
+
+Proportional assumption - low p-values indicates variable has time dependency
+"the proportionality assumption does not check linearity - the Cox PH model is 
+semi-parametric and thus makes no assumption as to the form of the hazard. 
+The proportionality assumption is that the hazard rate of an individual is 
+relatively constant in time"
+  * semi-parametric = don't have to choose probability dist'n for survival time
+```{r}
+cox.zph(cox.male.model)
+plot(cox.zph(cox.male.model))
+```
+
+
+```{r}
+# # different arbitrary risk profiles
+# risk_profiles <- data.frame(
+#   profile_name = c("Low Risk", "Moderate Risk", "High Risk"),
+#   AGE = c(55, 65, 75),
+#   DIABETES = c(0, 0, 1),
+#   SYSBP = c(120, 140, 160),
+#   CURSMOKE = c(0, 1, 1),
+#   BMI = c(25, 28, 32))
+
+# baseline survival at 10 years 
+baseline_surv <- survfit(cox.male.model)
+summary(baseline_surv, times = 10*365.25)
+
+# survival to probability of stroke
+#risk_profiles$prob_stroke_10yr <- 1 - summary_baseline$surv
+```
+
+
+
+
+## Secondary Analysis
+
+"how much change there is in the risk factors over in the 3 periods of data collection"
+```{r}
+# # change across periods
+# rf_change <- fmhst_filt %>%
+#   group_by(SEX) %>%
+#   summarise(
+#     # SYSBP
+#     SYSBP_p1_med = median(SYSBP_PERIOD1, na.rm = TRUE),
+#     SYSBP_p2_med = median(SYSBP_PERIOD2, na.rm = TRUE),
+#     SYSBP_p3_med = median(SYSBP_PERIOD3, na.rm = TRUE),
+#     SYSBP_change_abs = SYSBP_p3_med - SYSBP_p1_med,
+#     SYSBP_change_pct = (SYSBP_change_abs / SYSBP_p1_med) * 100,
+#     
+#     # BMI
+#   )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
