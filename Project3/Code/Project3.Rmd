@@ -157,7 +157,7 @@ fmhst_filt %>%
 
 ### Kaplan-Meier Curve
 ```{r}
-km.fit <- survfit(Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ BPMEDS, 
+km.fit <- survfit(Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ SEX, 
                   data = fmhst_filt)
 
 ggsurvplot(km.fit,
