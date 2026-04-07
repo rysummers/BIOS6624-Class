@@ -180,7 +180,7 @@ ggsurvplot(km.fit,
 # create grouped versions of variables
 fmhst_plot <- fmhst_filt %>%
   mutate(
-    SBP_cat = if_else(SYSBP >= 140, "BP≥140", "BP<140"),
+    SBP_cat = if_else(SYSBP >= 160, "BP≥160", "BP<160"),
     AGE_cat = if_else(AGE >= 60, "Age≥60", "Age<60"),
     TOTCHOL_cat = if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
     BMI_cat = if_else(BMI >= 30, "BMI≥30", "BMI<30")
@@ -220,7 +220,7 @@ p + theme(legend.position = "bottom")
 # create grouped versions of variables
 fmhst_plot2 <- fmhst_filt %>%
   mutate(
-    SBP_cat = if_else(SYSBP >= 140, "BP≥140", "BP<140"),
+    SBP_cat = if_else(SYSBP >= 160, "BP≥160", "BP<160"),
     AGE_cat = if_else(AGE >= 60, "Age≥60", "Age<60"),
     TOTCHOL_cat = if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
     BMI_cat = if_else(BMI >= 30, "BMI≥30", "BMI<30")
