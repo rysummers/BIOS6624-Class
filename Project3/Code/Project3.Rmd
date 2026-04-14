@@ -20,13 +20,15 @@ library(gt)
 library(gtsummary)
 library(survival)
 library(survminer)
-
+library(olsrr)
+library(ncvreg)
+library(StepReg)
 ```
 
 ## Load Data
 
 ```{r}
-fmhst_raw <- read_csv("/Users/ryan_summers/GitHub/BIOS6624-Class/Project3/DataRaw/frmgham2.csv")
+fmhst_raw <- read_csv("/Users/ryan_summers/Library/Mobile Documents/com~apple~CloudDocs/GitHub/BIOS6624-Class/Project3/DataRaw/frmgham2.csv")
 ```
 
 ## Data Management & Cleanup
@@ -138,12 +140,6 @@ hist(fmhst_filt$TOTCHOL)
 ```
 
 
-STROKE indicator is 0 but there's a time to stroke value????
-```{r}
-fmhst_filt %>% 
-  filter(STROKE==0 & TIMESTRK <= 10*365.25) %>% 
-  select(c(1,24,29,), 36:43)
-```
 
 ```{r}
 # crude incidence
@@ -155,104 +151,114 @@ fmhst_filt %>%
     risk = round( (events / total)*100,1 ))
 ```
 
+Correlations
+```{r}
+library(ggcorrplot)
+library(rcompanion)
+
+corr_vars <- c("AGE", "SYSBP", "TOTCHOL", "BMI")
+
+cor_matrix <- cor(
+  fmhst_filt[, corr_vars],
+  use = "pairwise.complete.obs",
+  method = "spearman")
+
+ggcorrplot(cor_matrix,
+           type = "lower",
+           lab = T)
+
+tab <- table(fmhst_filt$DIABETES, fmhst_filt$PREVCHD)
+cramerV(tab)
+```
+
+
+
 ### Kaplan-Meier Curve
-```{r}
-km.fit <- survfit(Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ SEX, 
-                  data = fmhst_filt)
 
-ggsurvplot(km.fit,
-           conf.int = F,
-           risk.table = T,
-           ylim = c(0.97,1),
-           xlab = "Time (Days)",
-           ylab = "Stroke-free probability",
-           tables.height = 0.2,
-           tables.theme = theme_cleantable(),
-            # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
-           # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
-           palette = c("#E7B800", "#2E9FDF"),
-           ggtheme = theme_bw() )
-           
+```{r}
+make_stroke_plot <- function(data, sex, vars, title = NULL) {
+  plot_data <- data %>%
+    filter(SEX == sex) %>%
+    mutate(
+      SBP_cat     = if_else(SYSBP >= 160, "BP≥160", "BP<160"),
+      AGE_cat     = if_else(AGE >= 60, "Age≥60", "Age<60"),
+      TOTCHOL_cat = if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
+      BMI_cat     = if_else(BMI >= 30, "BMI≥30", "BMI<30")) %>%
+    select(TIMESTRKorCENS_10y, STROKE_10y, all_of(names(vars))) %>%
+    pivot_longer(
+      cols = -c(TIMESTRKorCENS_10y, STROKE_10y),
+      names_to = "variable",
+      values_to = "group") %>%
+    mutate(
+      variable = factor(variable,
+        levels = names(vars),
+        labels = unname(vars)))
+
+  fit <- survfit(
+    Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ group + variable,
+    data = plot_data)
+
+  p <- ggsurvplot_facet(
+    fit,
+    data = plot_data,
+    facet.by = "variable",
+    conf.int = FALSE,
+    ylim = c(0.97, 1),
+    xlab = "Time (Days)",
+    ylab = "Stroke-free probability",
+    title = title,
+    ggtheme = theme_bw() )
+
+  p <- p + theme(legend.position = "bottom")
+  p
+}
 ```
 
-```{r}
-
-# create grouped versions of variables
-fmhst_plot <- fmhst_filt %>%
-  mutate(
-    SBP_cat = if_else(SYSBP >= 160, "BP≥160", "BP<160"),
-    AGE_cat = if_else(AGE >= 60, "Age≥60", "Age<60"),
-    TOTCHOL_cat = if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
-    BMI_cat = if_else(BMI >= 30, "BMI≥30", "BMI<30")
-    ) %>%
-  select(TIMESTRKorCENS_10y, STROKE_10y, SBP_cat, DIABETES, PREVCHD, AGE_cat) %>%
-  pivot_longer(
-    cols = -c(TIMESTRKorCENS_10y, STROKE_10y),
-    names_to = "variable",
-    values_to = "group") %>% 
-    mutate(
-    variable = factor(variable,
-      levels = c("AGE_cat", "SBP_cat", "DIABETES", "PREVCHD"),
-      labels = c("Age", "Systolic BP", "Diabetes", "Prior CHD")
-    ))
-
-# fit survival object
-fit <- survfit(Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ group + variable, 
-  data = fmhst_plot)
-
-# plot
-p <- ggsurvplot_facet(
-  fit,
-  data = fmhst_plot,
-  facet.by = "variable",
-  conf.int = FALSE,
-  ylim = c(0.97,1),
-  xlab = "Time (Days)",
-  ylab = "Stroke-free probability",
-  ggtheme = theme_bw())
-
-p + theme(legend.position = "bottom")
-
-```
 
 ```{r}
 
-# create grouped versions of variables
-fmhst_plot2 <- fmhst_filt %>%
-  mutate(
-    SBP_cat = if_else(SYSBP >= 160, "BP≥160", "BP<160"),
-    AGE_cat = if_else(AGE >= 60, "Age≥60", "Age<60"),
-    TOTCHOL_cat = if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
-    BMI_cat = if_else(BMI >= 30, "BMI≥30", "BMI<30")
-    ) %>%
-  select(TIMESTRKorCENS_10y, STROKE_10y, TOTCHOL_cat, BMI_cat, BPMEDS, CURSMOKE) %>%
-  pivot_longer(
-    cols = -c(TIMESTRKorCENS_10y, STROKE_10y),
-    names_to = "variable",
-    values_to = "group") %>% 
-    mutate(
-    variable = factor(variable,
-      levels = c("TOTCHOL_cat", "BMI_cat", "BPMEDS", "CURSMOKE"),
-      labels = c("Total Chol", "BMI", "BP Meds", "Smoker")
-    ))
+vars1 <- c(
+  AGE_cat  = "Age",
+  SBP_cat  = "Systolic BP",
+  DIABETES = "Diabetes",
+  PREVCHD  = "Prior CHD")
 
-# fit survival object
-fit2 <- survfit(Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ group + variable, 
-  data = fmhst_plot2)
+vars2 <- c(
+  TOTCHOL_cat = "Total Chol",
+  BMI_cat     = "BMI",
+  BPMEDS      = "BP Meds",
+  CURSMOKE    = "Smoker")
 
-# plot
-p2 <- ggsurvplot_facet(
-  fit2,
-  data = fmhst_plot2,
-  facet.by = "variable",
-  conf.int = FALSE,
-  ylim = c(0.97,1),
-  xlab = "Time (Days)",
-  ylab = "Stroke-free probability",
-  ggtheme = theme_bw())
 
-p2 + theme(legend.position = "bottom")
+p_women1 <- make_stroke_plot(
+  data = fmhst_filt,
+  sex = "Women",
+  vars = vars1,
+  title = "Stroke-free survival: Women")
 
+p_women2 <- make_stroke_plot(
+  data = fmhst_filt,
+  sex = "Women",
+  vars = vars2,
+  title = "Stroke-free survival: Women")
+
+p_men1 <- make_stroke_plot(
+  data = fmhst_filt,
+  sex = "Men",
+  vars = vars1,
+  title = "Stroke-free survival: Men")
+
+p_men2 <- make_stroke_plot(
+  data = fmhst_filt,
+  sex = "Men",
+  vars = vars2,
+  title = "Stroke-free survival: Men")
+
+p_women1
+p_women2
+
+p_men1
+p_men2
 ```
 
 
@@ -326,44 +332,153 @@ time_tbl
 
 
 ## Primary Analysis
-```{r}
-cox.male.model <- coxph(
-  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP + DIABETES +  
-  TOTCHOL + BMI + CURSMOKE + BPMEDS + PREVCHD, 
-                   data = subset(fmhst_filt, SEX == "Men"))
-summary(cox.male.model)
-```
+
+### Variable Selection
 
 Proportional assumption - low p-values indicates variable has time dependency
 "the proportionality assumption does not check linearity - the Cox PH model is 
 semi-parametric and thus makes no assumption as to the form of the hazard. 
 The proportionality assumption is that the hazard rate of an individual is 
 relatively constant in time"
-  * semi-parametric = don't have to choose probability dist'n for survival time
+  * semi-parametric = don't have to choose prob dist'n for surv time
+
 ```{r}
-cox.zph(cox.male.model)
-plot(cox.zph(cox.male.model))
+# stratify datae in women and men
+vars <- c("AGE", "SYSBP", "DIABETES", "TOTCHOL",
+          "BMI", "CURSMOKE", "BPMEDS", "PREVCHD",
+          "TIMESTRKorCENS_10y", "STROKE_bin")
+
+men_dat <- subset(fmhst_filt, SEX == "Men", select = vars)
+men_dat <- na.omit(men_dat)
+
+women_dat <- subset(fmhst_filt, SEX == "Women", select = vars)
+women_dat <- na.omit(women_dat)
+
+```
+
+#### Fit model (Men)
+```{r}
+cox.men.model <- coxph(
+  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP + DIABETES + 
+    # variables to be determined
+    TOTCHOL + BMI + CURSMOKE + BPMEDS + PREVCHD, 
+  data = men_dat)
+
+summary(cox.men.model)
+```
+
+```{r}
+cox.zph(cox.men.model)
+plot(cox.zph(cox.men.model))
+```
+
+StepReg:
+
+```{r}
+form <- Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP + DIABETES + 
+    TOTCHOL + BMI + CURSMOKE + BPMEDS + PREVCHD
+
+step.fit.men <- stepwise(formula = form,
+                data = men_dat,
+                type = "cox",
+                include = c("AGE", "DIABETES", "SYSBP"),
+                strategy = "backward",
+                metric = c("AICc", "SBC", "HQ"))
+
+summary(step.fit.men$backward$AICc)
+summary(step.fit.men$backward$SBC)
+summary(step.fit.men$backward$HQ)
+performance(step.fit.men)
+```
+
+```{r}
+summary(step.fit.men$backward$AICc)
+summary(step.fit.men$backward$SL)
+```
+
+```{r}
+plot(step.fit.men, strategy = "backward", process = "overview")
+plot(step.fit.men, strategy = "backward", process = "detail")
+```
+
+Plot details of stepwise
+```{r}
+plot_list <- setNames(
+  lapply(c("backward"),function(i){
+    setNames(
+      lapply(c("detail","overview"),function(j){
+        plot(step.fit.men, strategy=i, process=j)
+    }),
+    c("detail","overview"))
+  }),
+  c("backward"))
+
+cowplot::plot_grid(plotlist = plot_list$backward, ncol = 1, 
+                   rel_heights = c(2, 1))
 ```
 
 
 ```{r}
-# # different arbitrary risk profiles
-# risk_profiles <- data.frame(
-#   profile_name = c("Low Risk", "Moderate Risk", "High Risk"),
-#   AGE = c(55, 65, 75),
-#   DIABETES = c(0, 0, 1),
-#   SYSBP = c(120, 140, 160),
-#   CURSMOKE = c(0, 1, 1),
-#   BMI = c(25, 28, 32))
-
-# baseline survival at 10 years 
-baseline_surv <- survfit(cox.male.model)
-summary(baseline_surv, times = 10*365.25)
-
-# survival to probability of stroke
-#risk_profiles$prob_stroke_10yr <- 1 - summary_baseline$surv
+step.men <- step(cox.men.model, 
+     direction = "backward", 
+     scope = list(lower = ~ AGE + SYSBP + DIABETES))
+summary(step.men)
 ```
 
+#### Fit model (Women)
+```{r}
+cox.women.model <- coxph(
+  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP + DIABETES + 
+    # variables to be determined
+    TOTCHOL + BMI + CURSMOKE + BPMEDS + PREVCHD, 
+  data = women_dat)
+
+summary(cox.women.model)
+```
+
+```{r}
+step.fit.women <- stepwise(formula = form,
+                data = women_dat,
+                type = "cox",
+                include = c("AGE", "DIABETES", "SYSBP"),
+                strategy = "backward",
+                metric = c("AICc", "SBC", "HQ"))
+
+summary(step.fit.women$backward$AICc)
+summary(step.fit.women$backward$SBC)
+summary(step.fit.women$backward$HQ)
+performance(step.fit.women)
+```
+
+```{r}
+plot_list2 <- setNames(
+  lapply(c("backward"), function(i){
+    setNames(
+      lapply(c("detail","overview"), function(j){
+        plot(step.fit.women, strategy=i, process=j)
+    }),
+    c("detail","overview"))
+  }),
+  c("backward"))
+
+cowplot::plot_grid(plotlist = plot_list2$backward, ncol = 2, 
+                   rel_heights = c(2, 1))
+```
+
+```{r}
+step.women <- step(cox.women.model, 
+     direction = "backward", 
+     scope = list(lower = ~ AGE + SYSBP + DIABETES))
+summary(step.women)
+```
+
+```{r}
+#amount of women on BP meds
+fmhst_filt %>% 
+  filter(SEX=="Women") %>% 
+  group_by(BPMEDS) %>% 
+  summarize(n = n())
+```
 
 
 
