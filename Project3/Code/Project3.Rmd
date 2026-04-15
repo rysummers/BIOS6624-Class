@@ -23,6 +23,8 @@ library(survminer)
 library(olsrr)
 library(ncvreg)
 library(StepReg)
+library(ggcorrplot)
+library(rcompanion)
 ```
 
 ## Load Data
@@ -64,17 +66,22 @@ fmhst_filt <- fmhst_raw %>%
     STROKE_bin = ifelse(STROKE_10y == "Yes", 1, 0),
     CENSORED_10y = factor(CENSORED_10y, levels = c(0, 1), labels = c("No", "Yes")),
     TIMESTRKorCENS_10y_yrs = TIMESTRKorCENS_10y/365.25,
-    )
+    ) %>% 
+  mutate(
+    SYSBP_10 = SYSBP / 10,
+    TOTCHOL_10 = TOTCHOL / 10)
 ```
 
 We restricted the primary analysis to baseline risk factors measured at period 1 and 
 modeled incident stroke over the first 10 years of follow-up. This approach aligns 
 predictor measurement more closely with the risk window of interest. We additionally 
-examined how major risk factors changed across the three examination periods to assess whether a time-varying covariate analysis might be informative. If risk factors change materially over time, 
-a baseline-only model may understate or misclassify the relationship between current 
-risk-factor status and stroke hazard. However, time-varying covariate analyses in 
-observational data may also be harder to interpret because updated covariates can be
-influenced by treatment changes and evolving disease status.
+examined how major risk factors changed across the three examination periods to 
+assess whether a time-varying covariate analysis might be informative. If risk 
+factors change materially over time,  a baseline-only model may understate or 
+misclassify the relationship between current risk-factor status and stroke hazard. 
+However, time-varying covariate analyses in observational data may also be harder
+to interpret because updated covariates can be influenced by treatment changes and 
+evolving disease status.
 
 ## Exploratory Data Analysis (EDA)
 
@@ -125,6 +132,119 @@ tbl1 <- fmhst_filt %>%
 tbl1
 ```
 
+Compact version (Mean vs Median??)
+
+```{r}
+tbl1 <- fmhst_filt %>%
+  tbl_summary(
+    by = SEX,
+    include = c(
+      AGE, SYSBP, DIABETES, TOTCHOL, PREVCHD, BPMEDS, CURSMOKE, BMI),
+    type = list(
+      all_continuous() ~ "continuous",
+      all_categorical() ~ "categorical"),
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"),
+    digits = list(
+      AGE ~ 0,
+      SYSBP ~ 0,
+      TOTCHOL ~ 0,
+      BMI ~ 1),
+    missing = "ifany",
+    missing_text = "Missing",
+    missing_stat = "{N_miss} ({p_miss}%)",
+    label = list(
+      AGE ~ "Age",
+      SYSBP ~ "Systolic BP",
+      DIABETES ~ "Diabetes",
+      TOTCHOL ~ "Total Cholesterol (mg/dL)",
+      PREVCHD ~ "Cardiovascular Disease",
+      BPMEDS ~ "BP Meds",
+      CURSMOKE ~ "Smoker",
+      BMI ~ "BMI")) %>%
+  add_overall() %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  add_n() %>%
+  as_gt() %>%
+  gt::fmt_markdown(columns = everything()) %>%
+  tab_header(
+    title = "Characteristics of the Framingham Heart Study Cohort") %>%
+  tab_options(
+    table.width = pct(70),
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+tbl1
+```
+
+
+```{r}
+tbl1 <- fmhst_filt %>%
+  tbl_summary(
+    by = SEX,
+    include = c(
+      AGE, SYSBP, DIABETES, TOTCHOL, PREVCHD, BPMEDS, CURSMOKE, BMI
+    ),
+    type = list(
+      all_continuous() ~ "continuous",
+      all_categorical() ~ "categorical"
+    ),
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = list(
+      AGE ~ 0,
+      SYSBP ~ 0,
+      TOTCHOL ~ 0,
+      BMI ~ 1
+    ),
+    missing = "no",
+    label = list(
+      AGE ~ "Age",
+      SYSBP ~ "Systolic BP",
+      DIABETES ~ "Diabetes",
+      TOTCHOL ~ "Total Cholesterol (mg/dL)",
+      PREVCHD ~ "Prevalent CHD",
+      BPMEDS ~ "BP Meds",
+      CURSMOKE ~ "Smoker",
+      BMI ~ "BMI")) %>%
+  add_overall() %>%
+  add_n() %>%
+  add_stat(
+    fns = everything() ~ function(data, variable, ...) {
+      x <- data[[variable]]
+      paste0(sum(is.na(x)), " (", round(mean(is.na(x)) * 100, 1), "%)")
+    },
+    location = everything() ~ "label") %>%
+  modify_header(add_stat_1 ~ "Missing") %>%
+  modify_table_body(
+    ~ dplyr::relocate(.x, add_stat_1, .after = n)) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  as_gt() %>% 
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = add_stat_1)) %>% 
+  gt::fmt_markdown(columns = everything()) %>%
+  tab_header(
+    title = "Characteristics of the Framingham Heart Study Cohort") %>%
+  tab_options(
+    table.width = pct(70),
+    table.font.size = "small",
+    heading.align = "left",
+    data_row.padding = px(3))
+
+tbl1
+```
+
+
+
 ```{r}
 # number of participants
 cat("Number of participants in entire cohort", 
@@ -151,11 +271,8 @@ fmhst_filt %>%
     risk = round( (events / total)*100,1 ))
 ```
 
-Correlations
+### Correlations & Associations
 ```{r}
-library(ggcorrplot)
-library(rcompanion)
-
 corr_vars <- c("AGE", "SYSBP", "TOTCHOL", "BMI")
 
 cor_matrix <- cor(
@@ -171,6 +288,15 @@ tab <- table(fmhst_filt$DIABETES, fmhst_filt$PREVCHD)
 cramerV(tab)
 ```
 
+Test association of BP and BP medication use btw Women & Men
+```{r}
+fmhst_complete <- fmhst_filt %>% filter(!is.na(SYSBP), !is.na(BPMEDS))
+t.test(log(SYSBP) ~ BPMEDS, data = subset(fmhst_complete, SEX=="Women"))
+t.test(log(SYSBP) ~ BPMEDS, data = subset(fmhst_complete, SEX=="Men"))
+ggplot(fmhst_complete, aes(x = BPMEDS, y = log(SYSBP), fill = BPMEDS)) +
+  facet_wrap(~SEX) +
+  geom_boxplot() + theme_bw()
+```
 
 
 ### Kaplan-Meier Curve
@@ -202,7 +328,9 @@ make_stroke_plot <- function(data, sex, vars, title = NULL) {
     fit,
     data = plot_data,
     facet.by = "variable",
-    conf.int = FALSE,
+    conf.int = F,
+    # pval = T,
+    # pval.method = T,
     ylim = c(0.97, 1),
     xlab = "Time (Days)",
     ylab = "Stroke-free probability",
@@ -266,16 +394,6 @@ p_men2
 ### Distributions of Time to Event by Sex
 
 ```{r}
-# time-to-event variables and labels
-# time_vars <- c(
-#   TIMEHYP  = "Days Baseline-Inc Hypertension",
-#   TIMEAP   = "Days Baseline-Inc Angina",
-#   TIMEMI   = "Days Baseline-Inc Hosp MI",
-#   TIMEMIFC = "Days Baseline-Inc MI-Fatal CHD",
-#   TIMESTRK = "Days Baseline-Inc Stroke",
-#   TIMECHD  = "Days Baseline-Inc Any CHD",
-#   TIMECVD  = "Days Baseline-Inc CVD",
-#   TIMEDTH  = "Days Baseline-Death")
 
 time_vars <- c(TIMESTRKorCENS_10y = "Follow-up time (days)")
 
@@ -333,6 +451,8 @@ time_tbl
 
 ## Primary Analysis
 
+**Risk Factors**
+
 ### Variable Selection
 
 Proportional assumption - low p-values indicates variable has time dependency
@@ -344,7 +464,7 @@ relatively constant in time"
 
 ```{r}
 # stratify datae in women and men
-vars <- c("AGE", "SYSBP", "DIABETES", "TOTCHOL",
+vars <- c("AGE", "SYSBP_10", "DIABETES", "TOTCHOL_10",
           "BMI", "CURSMOKE", "BPMEDS", "PREVCHD",
           "TIMESTRKorCENS_10y", "STROKE_bin")
 
@@ -356,32 +476,28 @@ women_dat <- na.omit(women_dat)
 
 ```
 
-#### Fit model (Men)
+#### Full model (Men)
 ```{r}
 cox.men.model <- coxph(
-  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP + DIABETES + 
+  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP_10*BPMEDS + DIABETES + 
     # variables to be determined
-    TOTCHOL + BMI + CURSMOKE + BPMEDS + PREVCHD, 
+    TOTCHOL_10 + BMI + CURSMOKE + PREVCHD, 
   data = men_dat)
 
 summary(cox.men.model)
 ```
 
-```{r}
-cox.zph(cox.men.model)
-plot(cox.zph(cox.men.model))
-```
 
 StepReg:
 
 ```{r}
-form <- Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP + DIABETES + 
-    TOTCHOL + BMI + CURSMOKE + BPMEDS + PREVCHD
+form <- Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP_10*BPMEDS + DIABETES + 
+    TOTCHOL_10 + BMI + CURSMOKE + PREVCHD
 
 step.fit.men <- stepwise(formula = form,
                 data = men_dat,
                 type = "cox",
-                include = c("AGE", "DIABETES", "SYSBP"),
+                include = c("AGE", "DIABETES", "SYSBP_10"),
                 strategy = "backward",
                 metric = c("AICc", "SBC", "HQ"))
 
@@ -421,16 +537,16 @@ cowplot::plot_grid(plotlist = plot_list$backward, ncol = 1,
 ```{r}
 step.men <- step(cox.men.model, 
      direction = "backward", 
-     scope = list(lower = ~ AGE + SYSBP + DIABETES))
+     scope = list(lower = ~ AGE + SYSBP_10 + DIABETES))
 summary(step.men)
 ```
 
-#### Fit model (Women)
+#### Full model (Women)
 ```{r}
 cox.women.model <- coxph(
-  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP + DIABETES + 
+  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP_10*BPMEDS + DIABETES + 
     # variables to be determined
-    TOTCHOL + BMI + CURSMOKE + BPMEDS + PREVCHD, 
+    TOTCHOL_10 + BMI + CURSMOKE + PREVCHD, 
   data = women_dat)
 
 summary(cox.women.model)
@@ -440,7 +556,7 @@ summary(cox.women.model)
 step.fit.women <- stepwise(formula = form,
                 data = women_dat,
                 type = "cox",
-                include = c("AGE", "DIABETES", "SYSBP"),
+                include = c("AGE", "DIABETES", "SYSBP_10"),
                 strategy = "backward",
                 metric = c("AICc", "SBC", "HQ"))
 
@@ -468,7 +584,7 @@ cowplot::plot_grid(plotlist = plot_list2$backward, ncol = 2,
 ```{r}
 step.women <- step(cox.women.model, 
      direction = "backward", 
-     scope = list(lower = ~ AGE + SYSBP + DIABETES))
+     scope = list(lower = ~ AGE + SYSBP_10 + DIABETES))
 summary(step.women)
 ```
 
@@ -480,6 +596,319 @@ fmhst_filt %>%
   summarize(n = n())
 ```
 
+### Final Models
+
+
+
+```{r}
+cox.women.final <- coxph(
+  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP_10*BPMEDS + DIABETES + 
+    CURSMOKE + PREVCHD, 
+  data = women_dat)
+
+summary(cox.women.final)
+
+cox.men.final <- coxph(
+  Surv(TIMESTRKorCENS_10y, STROKE_bin) ~ AGE + SYSBP_10*BPMEDS + DIABETES + 
+    CURSMOKE + PREVCHD, 
+  data = men_dat)
+
+summary(cox.men.final)
+```
+Sample interpretation:
+Systolic BP was positively associated with stroke risk in women, with each 1 mmHg increase corresponding to a 2.5% increase in hazard (HR = 1.025; 95% CI: 1.015–1.035). This corresponds to approximately a 28% ($1.025^{10} ≈ 1.28$) increase in hazard per 10 mmHg increase.
+
+Systolic BP was positively associated with stroke risk in men, with each 1 mmHg increase corresponding to a 3.5% increase in hazard (HR = 1.0352; 95% CI: 1.023–1.048). This corresponds to approximately a 41.3% ($1.035^{10} ≈ 1.413$) increase in hazard per 10 mmHg increase.
+
+#### Proportionality Check
+```{r}
+ph_women <- cox.zph(cox.women.final)
+ph_women
+par(mfrow = c(3, 3), mar = c(4, 4, 2, 2)) # c(bottom, left, top, right)
+plot(ph_women)
+```
+
+```{r}
+ph_men <- cox.zph(cox.men.final)
+ph_men
+par(mfrow = c(3, 3), mar = c(4, 4, 2, 2)) # c(bottom, left, top, right)
+plot(ph_men)
+```
+
+
+#### Risk Factors Table
+
+```{r}
+
+broom::tidy(cox.men.final, exponentiate = TRUE, conf.int = TRUE) %>%
+  mutate(
+    pct_change = (estimate - 1) * 100,
+    pct_label = paste0(
+      ifelse(pct_change >= 0, "+", ""),
+      round(pct_change, 1), "%"))
+```
+
+```{r}
+
+# helper function to generate results table
+make_cox_table <- function(model, sex_label) {
+  tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+    filter(term != "(Intercept)") %>%
+    mutate(
+      # rename terms
+      term = recode(
+        term,
+        "AGE" = "Age (per 1 year)",
+        "SYSBP_10" = "Systolic BP (per 10 mmHg)",
+        "DIABETESYes" = "Diabetes (Yes vs No)",
+        "TOTCHOL" = "Total cholesterol (per 1 mg/dL)",
+        "BMI" = "BMI (per 1 kg/m²)",
+        "CURSMOKEYes" = "Current smoker (Yes vs No)",
+        "BPMEDSYes" = "BP meds (Yes vs No)",
+        "PREVCHDYes" = "Cardiovascular Disease (Yes vs No)",
+        "SYSBP_10:BPMEDSYes" = "SBP × BP meds interaction"),
+
+      # percent change in hazard
+      pct_change = (estimate - 1) * 100,
+
+      # formatted columns
+      hr_ci = sprintf("%.2f (%.2f, %.2f; p=%s)",estimate,conf.low,conf.high,
+                      format.pval(p.value, digits = 2, eps = 0.01)),
+      pct_label = sprintf(
+        "%s%.1f%%",
+        ifelse(pct_change >= 0, "+", ""),
+        pct_change)) %>%
+    select(term, hr_ci, pct_label) %>%
+    rename(
+      !!paste0(sex_label, "_HR_CI") := hr_ci,
+      !!paste0(sex_label, "_Pct") := pct_label)
+  }
+
+tbl_women <- make_cox_table(cox.women.final, "Women")
+tbl_men   <- make_cox_table(cox.men.final, "Men")
+
+# merge 
+tbl_final <- full_join(tbl_women, tbl_men, by = "term") %>%
+  rename(`Risk factor` = term)
+
+tbl_final
+```
+
+
+```{r label = "Used in final report as Table 2"}
+gt_tbl <- tbl_final %>%
+  mutate(
+    Men_HR_CI = if_else(
+      `Risk factor` == "BP meds (Yes vs No)", "\u2020", Men_HR_CI),
+    Men_Pct = if_else(`Risk factor`=="BP meds (Yes vs No)","\u2020",Men_Pct)) %>% 
+  gt() %>%
+  tab_header(
+    title = "Hazard Ratios and Percent Change in Stroke Hazard by Sex") %>%
+  cols_label(
+    `Risk factor` = "Risk factor",
+    Men_HR_CI = "HR (95% CI;P-val)",
+    Men_Pct = "%Δ in Hazard",
+    Women_HR_CI = "HR (95% CI;P-val)",
+    Women_Pct = "%Δ in Hazard") %>%
+  tab_spanner(label = "Men", columns = c(Men_HR_CI, Men_Pct)) %>%
+  tab_spanner(label = "Women", columns = c(Women_HR_CI, Women_Pct)) %>%
+  cols_align(align = "left", columns = `Risk factor`) %>%
+  cols_align(align = "center",
+    columns = c(Men_HR_CI, Men_Pct, Women_HR_CI, Women_Pct)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_spanners()) %>% 
+  # by risk factor name
+  # tab_style(
+  #   style = cell_text(weight = "bold"),
+  #   locations = cells_body(columns = `Risk factor`)) %>% 
+  tab_footnote(
+    footnote = md("\u2020 Because the BP \u00d7 BP medication 
+                  interaction was significant in men, the effect of BP meds 
+                  depends on BP and is not summarized as a single hazard ratio."),
+    locations = cells_body(columns = c(Men_HR_CI, Men_Pct),
+      rows = `Risk factor` %in% c("BP meds (Yes vs No)", 
+                                  "SBP × BP meds interaction"))) %>% 
+  tab_options(
+    table.width = pct(88),
+    table.font.size = px(13),
+    heading.align = "left",
+    data_row.padding = px(5),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2)) 
+
+gt_tbl 
+```
+
+**10yr probability of stroke based on different risk profiles**
+
+```{r}
+
+risk_profiles <- tibble(
+  scenario = c(
+    "Baseline",
+    "High BP",
+    "Diabetes",
+    "Diabetes + High BP",
+    "Smoker + Diabetes + High BP"),
+  AGE = c(40, 40, 40, 40, 40),   # placeholder, replaced below
+  SYSBP_10 = c(12, 16, 12, 16, 16),   # 120 and 160 mmHg
+  DIABETES = factor(c("No", "No", "Yes", "Yes", "Yes"),
+                    levels = c("No", "Yes")),
+  CURSMOKE = factor(c("No", "No", "No", "No", "Yes"),
+                    levels = c("No", "Yes")),
+  PREVCHD = factor(c("No", "No", "No", "No", "No"),
+                   levels = c("No", "Yes")),
+  BPMEDS = factor(c("No", "No", "No", "No", "No"),
+                  levels = c("No", "Yes")))
+
+pred_data <- bind_rows(
+  risk_profiles %>% mutate(AGE = 40),
+  risk_profiles %>% mutate(AGE = 50),
+  risk_profiles %>% mutate(AGE = 60)) %>%
+  mutate(age_group = AGE)
+```
+
+
+```{r}
+make_preds <- function(model, sex_label, ages = c(40, 50, 60)) {
+  out <- lapply(ages, function(a) {
+    nd <- risk_profiles %>%
+      mutate(AGE = a)
+
+    sf <- survfit(model, newdata = nd)
+    surv_10y <- as.numeric(summary(sf, times = 10*365.25, extend = TRUE)$surv)
+
+    nd %>%
+      transmute(
+        sex = sex_label,
+        scenario,
+        age = paste("Age", a),
+        risk_10y = round(100 * (1 - surv_10y), 2)) #100%
+    })
+  bind_rows(out)
+  }
+
+women_results <- make_preds(cox.women.final, "Women")
+men_results   <- make_preds(cox.men.final, "Men")
+
+risk_table <- bind_rows(women_results, men_results) %>%
+  pivot_wider(names_from = age, values_from = risk_10y)
+
+risk_table
+```
+
+Check that function is behaving correctly
+```{r}
+women_50_base <- tibble(
+  AGE = 50,
+  SYSBP_10 = 12,   # 120 mmHg
+  DIABETES = factor("No", levels = c("No", "Yes")),
+  CURSMOKE = factor("No", levels = c("No", "Yes")),
+  PREVCHD = factor("No", levels = c("No", "Yes")),
+  BPMEDS = factor("No", levels = c("No", "Yes")))
+
+sf_check <- survfit(cox.women.final, newdata = women_50_base)
+1-summary(sf_check, times = 10*365.25, extend = TRUE)$surv
+```
+
+#### Risk Profiles Table
+
+```{r}
+
+risk_gt_df <- risk_table %>%
+  pivot_longer(cols = starts_with("Age"), names_to = "age",
+               values_to = "risk") %>%
+  pivot_wider(names_from = sex, values_from = risk) %>%
+  rename(Scenario = scenario) %>%
+  mutate(
+    Scenario = factor(
+      Scenario,
+      levels = c(
+        "Baseline",
+        "High BP",
+        "Diabetes",
+        "Diabetes + High BP",
+        "Smoker + Diabetes + High BP")),
+    age = factor(age, levels = c("Age 40", "Age 50", "Age 60"))) %>%
+  arrange(Scenario, age) %>%
+  pivot_wider(
+    names_from = age,
+    values_from = c(Women, Men),
+    names_vary = "slowest")
+
+risk_gt_df
+```
+```{r label = "Used in final report as Table 3"}
+risk_gt <- risk_gt_df %>%
+  gt() %>%
+  tab_header(
+    title = "Predicted 10-Year Probability of Stroke by Risk Profile and Sex") %>%
+  cols_label(
+    Scenario = "Risk profile",
+    `Women_Age 40` = "Women",
+    `Men_Age 40` = "Men",
+    `Women_Age 50` = "Women",
+    `Men_Age 50` = "Men",
+    `Women_Age 60` = "Women",
+    `Men_Age 60` = "Men") %>%
+  tab_spanner(label = "Age 40",columns = c(`Women_Age 40`, `Men_Age 40`)) %>%
+  tab_spanner(label = "Age 50",columns = c(`Women_Age 50`, `Men_Age 50`)) %>%
+  tab_spanner(label = "Age 60",columns = c(`Women_Age 60`, `Men_Age 60`)) %>%
+  fmt_number(columns = -Scenario, decimals = 1) %>%
+  cols_align(align = "left", columns = Scenario) %>%
+  cols_align( align = "center", columns = -Scenario) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_spanners()) %>% 
+  tab_options(
+    heading.align = "left",
+    table.font.size = px(14),
+    data_row.padding = px(5),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+risk_gt
+```
+
+Plot the 10yr probs
+```{r}
+
+plot_df <- risk_table %>%
+  pivot_longer(
+    cols = starts_with("Age"),
+    names_to = "age",
+    values_to = "risk") %>%
+  mutate(
+    scenario = factor(
+      scenario,
+      levels = c("Baseline", "High BP", "Diabetes", 
+                 "Diabetes + High BP", "Smoker")),
+    age = factor(age, levels = c("Age 40", "Age 50", "Age 60")))
+
+ggplot(plot_df, aes(x = scenario, y = risk, fill = age)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  facet_wrap(~ sex) +
+    scale_fill_manual(values = c(
+    "Age 40" = "#0072B2",
+    "Age 50" = "#E69F00",
+    "Age 60" = "#009E73")) +
+  labs(
+    x = NULL,
+    y = "Predicted 10-year stroke risk (%)",
+    fill = "Age") +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    strip.background = element_rect(fill = "white"),
+    axis.text.x = element_text(angle = 20, hjust = 1))
+```
 
 
 ## Secondary Analysis
