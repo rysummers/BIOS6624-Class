@@ -139,7 +139,7 @@ tbl1 <- fmhst_filt %>%
   tbl_summary(
     by = SEX,
     include = c(
-      AGE, SYSBP, DIABETES, TOTCHOL, PREVCHD, BPMEDS, CURSMOKE, BMI),
+      AGE, SYSBP, DIABETES, TOTCHOL, PREVCHD, BPMEDS, CURSMOKE, BMI, STROKE_10y),
     type = list(
       all_continuous() ~ "continuous",
       all_categorical() ~ "categorical"),
@@ -162,7 +162,8 @@ tbl1 <- fmhst_filt %>%
       PREVCHD ~ "Cardiovascular Disease",
       BPMEDS ~ "BP Meds",
       CURSMOKE ~ "Smoker",
-      BMI ~ "BMI")) %>%
+      BMI ~ "BMI",
+      STROKE_10y ~ "Event (Stroke)")) %>%
   add_overall() %>%
   bold_labels() %>%
   italicize_levels() %>%
@@ -299,95 +300,241 @@ ggplot(fmhst_complete, aes(x = BPMEDS, y = log(SYSBP), fill = BPMEDS)) +
 ```
 
 
-### Kaplan-Meier Curve
+### Kaplan-Meier Curves
 
 ```{r}
-make_stroke_plot <- function(data, sex, vars, title = NULL) {
+make_stroke_panel <- function(data, vars, title = NULL) {
   plot_data <- data %>%
-    filter(SEX == sex) %>%
     mutate(
       SBP_cat     = if_else(SYSBP >= 160, "BP≥160", "BP<160"),
       AGE_cat     = if_else(AGE >= 60, "Age≥60", "Age<60"),
       TOTCHOL_cat = if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
       BMI_cat     = if_else(BMI >= 30, "BMI≥30", "BMI<30")) %>%
-    select(TIMESTRKorCENS_10y, STROKE_10y, all_of(names(vars))) %>%
+    select(SEX, TIMESTRKorCENS_10y, STROKE_10y, all_of(names(vars))) %>%
     pivot_longer(
-      cols = -c(TIMESTRKorCENS_10y, STROKE_10y),
+      cols = all_of(names(vars)),
       names_to = "variable",
       values_to = "group") %>%
     mutate(
-      variable = factor(variable,
-        levels = names(vars),
-        labels = unname(vars)))
+      variable = factor(variable, levels = names(vars), labels = unname(vars)),
+      group = as.character(group),
+      strata_lab = interaction(SEX, variable, group, sep = " | "))
 
   fit <- survfit(
-    Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ group + variable,
+    Surv(TIMESTRKorCENS_10y, STROKE_10y == "Yes") ~ strata_lab,
     data = plot_data)
 
-  p <- ggsurvplot_facet(
-    fit,
-    data = plot_data,
-    facet.by = "variable",
-    conf.int = F,
-    # pval = T,
-    # pval.method = T,
-    ylim = c(0.97, 1),
-    xlab = "Time (Days)",
-    ylab = "Stroke-free probability",
-    title = title,
-    ggtheme = theme_bw() )
+  # Event-step data
+  s <- summary(fit)
 
-  p <- p + theme(legend.position = "bottom")
-  p
+  surv_df <- tibble(
+    time   = s$time,
+    surv   = s$surv,
+    strata = sub("^strata_lab=", "", s$strata)) %>%
+    separate(strata,into = c("SEX", "variable", "group"),sep = " \\| ") %>%
+    mutate(
+      SEX = factor(SEX, levels = c("Women", "Men")),
+      variable = factor(variable, levels = unname(vars))) %>%
+    group_by(SEX, variable, group) %>%
+    arrange(time, .by_group = TRUE) %>%
+    group_modify(~{
+      first_time <- min(.x$time, na.rm = TRUE)
+      bind_rows(
+        tibble(time = 0, surv = 1),
+        tibble(time = first_time, surv = 1),
+        .x)
+    }) %>%
+    ungroup()
+
+  # Censoring mark data
+  s_cens <- summary(fit, censored = TRUE)
+
+  censor_df <- tibble(
+    time   = s_cens$time,
+    surv   = s_cens$surv,
+    n.censor = s_cens$n.censor,
+    strata = sub("^strata_lab=", "", s_cens$strata)) %>%
+    filter(n.censor > 0) %>%
+    separate(strata,into = c("SEX", "variable", "group"),sep = " \\| ") %>%
+    mutate(
+      SEX = factor(SEX, levels = c("Women", "Men")),
+      variable = factor(variable, levels = unname(vars)))
+
+  ggplot(surv_df, aes(x = time, y = surv, color = group)) +
+    geom_step(linewidth = 0.7) +
+    geom_point(
+      data = censor_df,
+      aes(x = time, y = surv, color = group),
+      shape = 3,
+      stroke = 0.8,
+      size = 2,
+      inherit.aes = FALSE) +
+    facet_grid(SEX ~ variable) +
+    coord_cartesian(ylim = c(0.97, 1)) +
+    labs(
+      x = "Time (Days)",
+      y = "Stroke-free probability",
+      color = NULL,
+      title = title) +
+    theme_bw() +
+    theme(
+      legend.position = "bottom",
+      strip.background = element_rect(fill = "white"),
+      panel.spacing = unit(0.8, "lines"))
 }
 ```
 
 
-```{r}
-
+```{r, fig.width=10, fig.height=5}
 vars1 <- c(
-  AGE_cat  = "Age",
-  SBP_cat  = "Systolic BP",
+  AGE_cat = "Age",
+  SBP_cat = "SBP",
   DIABETES = "Diabetes",
-  PREVCHD  = "Prior CHD")
+  CURSMOKE = "Smoking")
 
 vars2 <- c(
+  BMI_cat = "BMI",
   TOTCHOL_cat = "Total Chol",
-  BMI_cat     = "BMI",
-  BPMEDS      = "BP Meds",
-  CURSMOKE    = "Smoker")
+  BPMEDS = "BP Meds",
+  PREVCHD = "Prior CHD")
 
+p1 <- make_stroke_panel(fmhst_filt, vars1,
+                       title = "Stroke-free survival by selected risk factors and sex")
+p1
 
-p_women1 <- make_stroke_plot(
-  data = fmhst_filt,
-  sex = "Women",
-  vars = vars1,
-  title = "Stroke-free survival: Women")
-
-p_women2 <- make_stroke_plot(
-  data = fmhst_filt,
-  sex = "Women",
-  vars = vars2,
-  title = "Stroke-free survival: Women")
-
-p_men1 <- make_stroke_plot(
-  data = fmhst_filt,
-  sex = "Men",
-  vars = vars1,
-  title = "Stroke-free survival: Men")
-
-p_men2 <- make_stroke_plot(
-  data = fmhst_filt,
-  sex = "Men",
-  vars = vars2,
-  title = "Stroke-free survival: Men")
-
-p_women1
-p_women2
-
-p_men1
-p_men2
+p2 <- make_stroke_panel(fmhst_filt, vars2,
+                       title = "Stroke-free survival by selected risk factors and sex")
+p2
 ```
+
+```{r}
+make_panel_base <- function(
+    data, vars,
+    title = "Stroke-free survival by selected risk factors and sex",
+    legend_positions = NULL,
+    cols = c("#0072B2", "#D55E00")) {
+  
+  df <- data %>%
+    mutate(
+      AGE_cat = factor(if_else(AGE >= 60, "Age≥60", "Age<60"),
+                       levels = c("Age<60", "Age≥60")),
+      SBP_cat = factor(if_else(SYSBP >= 160, "BP≥160", "BP<160"),
+                       levels = c("BP<160", "BP≥160")),
+      TOTCHOL_cat = factor(if_else(TOTCHOL >= 240, "Chol≥240", "Chol<240"),
+                           levels = c("Chol<240", "Chol≥240")),
+      BMI_cat = factor(if_else(BMI >= 30, "BMI≥30", "BMI<30"),
+                       levels = c("BMI<30", "BMI≥30")),
+      DIABETES = factor(DIABETES, levels = c("No", "Yes")),
+      CURSMOKE = factor(CURSMOKE, levels = c("No", "Yes")),
+      PREVCHD = factor(PREVCHD, levels = c("No", "Yes")))
+
+  stopifnot(length(vars) == 4)
+
+  if (is.null(legend_positions)) {
+    legend_positions <- rep(list("bottomleft"), 8)
+  }
+
+  oldpar <- par(no.readonly = TRUE)
+  on.exit(par(oldpar))
+
+  par(mfrow = c(2, 4), mar = c(3, 3, 3, 1), oma = c(3, 3, 3, 1))
+
+  plot_one <- function(
+    subdat, group_var, main_title,
+    legend_pos = "bottomleft",
+    cols = c("#0072B2", "#D55E00")) {
+    
+    f <- as.formula(
+      paste0("Surv(TIMESTRKorCENS_10y/365.25, STROKE_bin) ~ ", group_var))
+    fit <- survfit(f, data = subdat)
+
+    lvls <- levels(subdat[[group_var]])
+
+    plot(
+      fit,
+      col = cols[seq_along(lvls)],
+      lwd = 2,
+      mark.time = TRUE,
+      conf.int = FALSE,
+      ylim = c(0.97, 1.00),
+      xlab = "",
+      ylab = "",
+      main = main_title,
+      xaxt = "n",
+      yaxt = "n",
+      cex.axis = 1.2,   # tick labels
+      cex.lab = 1.0,    # axis labels
+      cex.main = 1.2    # panel title
+      )
+    
+    axis(1)
+    yticks <- seq(0.97, 1.00, by = 0.01)
+    axis(2, at = yticks, labels = sprintf("%.2f", yticks),las = 1)
+
+    legend(
+      legend_pos,
+      legend = lvls,
+      col = cols[seq_along(lvls)],
+      lwd = 2,
+      bty = "n",
+      cex = 1.1)
+  }
+
+  wdat <- filter(df, SEX == "Women")
+  mdat <- filter(df, SEX == "Men")
+
+  for (i in seq_along(vars)) {
+    var_name <- names(vars)[i]
+    var_label <- unname(vars)[i]
+
+    plot_one(
+      wdat,
+      group_var = var_name,
+      main_title = paste("Women:", var_label),
+      legend_pos = legend_positions[[i]],
+      cols = cols)
+  }
+
+  for (i in seq_along(vars)) {
+    var_name <- names(vars)[i]
+    var_label <- unname(vars)[i]
+
+    plot_one(
+      mdat,
+      group_var = var_name,
+      main_title = paste("Men:", var_label),
+      legend_pos = legend_positions[[i + 4]],
+      cols = cols)
+  }
+
+  mtext("Time (Years)", side = 1, outer = TRUE, line = 1.2, cex = 1.1)
+  mtext("Stroke-free probability", side = 2, outer = TRUE, line = 1.2, cex = 1.1)
+  mtext(title, side = 3, outer = TRUE, line = 1, cex = 1.4)
+}
+```
+
+
+
+```{r label = "Used in final report as Figure 1", fig.width=10.5, fig.height=5.5}
+make_panel_base(
+  fmhst_filt,
+  vars = vars1,
+  legend_positions = list(
+    "bottomright", "bottomright", "bottomleft", "bottomleft",
+    "bottomleft", "bottomright", "bottomleft", "bottomleft"))
+
+make_panel_base(
+  fmhst_filt,
+  vars = vars2,
+  legend_positions = list(
+    "bottomleft", "bottomleft", "bottomright", "bottomright",
+    "bottomleft", "bottomleft", "bottomleft", "bottomleft"))
+```
+
+
+
+
+
 
 
 
@@ -596,9 +743,8 @@ fmhst_filt %>%
   summarize(n = n())
 ```
 
+
 ### Final Models
-
-
 
 ```{r}
 cox.women.final <- coxph(
@@ -615,6 +761,7 @@ cox.men.final <- coxph(
 
 summary(cox.men.final)
 ```
+
 Sample interpretation:
 Systolic BP was positively associated with stroke risk in women, with each 1 mmHg increase corresponding to a 2.5% increase in hazard (HR = 1.025; 95% CI: 1.015–1.035). This corresponds to approximately a 28% ($1.025^{10} ≈ 1.28$) increase in hazard per 10 mmHg increase.
 
@@ -647,6 +794,7 @@ broom::tidy(cox.men.final, exponentiate = TRUE, conf.int = TRUE) %>%
       ifelse(pct_change >= 0, "+", ""),
       round(pct_change, 1), "%"))
 ```
+
 
 ```{r}
 
@@ -710,8 +858,10 @@ gt_tbl <- tbl_final %>%
     Men_Pct = "%Δ in Hazard",
     Women_HR_CI = "HR (95% CI;P-val)",
     Women_Pct = "%Δ in Hazard") %>%
-  tab_spanner(label = "Men", columns = c(Men_HR_CI, Men_Pct)) %>%
-  tab_spanner(label = "Women", columns = c(Women_HR_CI, Women_Pct)) %>%
+  tab_spanner(label = paste0("Men (N=", cox.men.final$n, ")"), 
+              columns = c(Men_HR_CI, Men_Pct)) %>%
+  tab_spanner(label = paste0("Women (N=", cox.women.final$n, ")"), 
+              columns = c(Women_HR_CI, Women_Pct)) %>%
   cols_align(align = "left", columns = `Risk factor`) %>%
   cols_align(align = "center",
     columns = c(Men_HR_CI, Men_Pct, Women_HR_CI, Women_Pct)) %>%
@@ -721,10 +871,6 @@ gt_tbl <- tbl_final %>%
   tab_style(
     style = cell_text(weight = "bold"),
     locations = cells_column_spanners()) %>% 
-  # by risk factor name
-  # tab_style(
-  #   style = cell_text(weight = "bold"),
-  #   locations = cells_body(columns = `Risk factor`)) %>% 
   tab_footnote(
     footnote = md("\u2020 Because the BP \u00d7 BP medication 
                   interaction was significant in men, the effect of BP meds 
@@ -742,6 +888,29 @@ gt_tbl <- tbl_final %>%
 
 gt_tbl 
 ```
+
+Review the number of events within risk stratifications to validate comment on lower
+power in the report
+```{r}
+# Women
+fmhst_filt %>%
+  filter(SEX == "Women") %>%
+  group_by(PREVCHD) %>%
+  summarise(
+    n = n(),
+    events = sum(STROKE_10y == "Yes"),
+    risk = round(100 * events / n, 2))
+
+# Men
+fmhst_filt %>%
+  filter(SEX == "Men") %>%
+  group_by(PREVCHD) %>%
+  summarise(
+    n = n(),
+    events = sum(STROKE_10y == "Yes"),
+    risk = round(100 * events / n, 2))
+```
+
 
 **10yr probability of stroke based on different risk profiles**
 
@@ -842,6 +1011,8 @@ risk_gt_df <- risk_table %>%
 
 risk_gt_df
 ```
+
+
 ```{r label = "Used in final report as Table 3"}
 risk_gt <- risk_gt_df %>%
   gt() %>%
@@ -858,7 +1029,7 @@ risk_gt <- risk_gt_df %>%
   tab_spanner(label = "Age 40",columns = c(`Women_Age 40`, `Men_Age 40`)) %>%
   tab_spanner(label = "Age 50",columns = c(`Women_Age 50`, `Men_Age 50`)) %>%
   tab_spanner(label = "Age 60",columns = c(`Women_Age 60`, `Men_Age 60`)) %>%
-  fmt_number(columns = -Scenario, decimals = 1) %>%
+  fmt_number(columns = -Scenario, decimals = 1, pattern = "{x}%") %>%
   cols_align(align = "left", columns = Scenario) %>%
   cols_align( align = "center", columns = -Scenario) %>%
   tab_style(
@@ -868,9 +1039,10 @@ risk_gt <- risk_gt_df %>%
     style = cell_text(weight = "bold"),
     locations = cells_column_spanners()) %>% 
   tab_options(
+    table.width = pct(60),
     heading.align = "left",
-    table.font.size = px(14),
-    data_row.padding = px(5),
+    table.font.size = px(12),
+    data_row.padding = px(4),
     table.border.top.width = px(2),
     table.border.bottom.width = px(2))
 
@@ -889,7 +1061,7 @@ plot_df <- risk_table %>%
     scenario = factor(
       scenario,
       levels = c("Baseline", "High BP", "Diabetes", 
-                 "Diabetes + High BP", "Smoker")),
+                 "Diabetes + High BP", "Smoker + Diabetes + High BP")),
     age = factor(age, levels = c("Age 40", "Age 50", "Age 60")))
 
 ggplot(plot_df, aes(x = scenario, y = risk, fill = age)) +
@@ -903,11 +1075,12 @@ ggplot(plot_df, aes(x = scenario, y = risk, fill = age)) +
     x = NULL,
     y = "Predicted 10-year stroke risk (%)",
     fill = "Age") +
-  theme_bw() +
+  theme_bw()+
   theme(
+    legend.title = element_blank(),
     legend.position = "top",
     strip.background = element_rect(fill = "white"),
-    axis.text.x = element_text(angle = 20, hjust = 1))
+    axis.text.x = element_text(angle = 20, hjust = 1)) 
 ```
 
 
@@ -915,21 +1088,71 @@ ggplot(plot_df, aes(x = scenario, y = risk, fill = age)) +
 
 "how much change there is in the risk factors over in the 3 periods of data collection"
 ```{r}
-# # change across periods
-# rf_change <- fmhst_filt %>%
-#   group_by(SEX) %>%
-#   summarise(
-#     # SYSBP
-#     SYSBP_p1_med = median(SYSBP_PERIOD1, na.rm = TRUE),
-#     SYSBP_p2_med = median(SYSBP_PERIOD2, na.rm = TRUE),
-#     SYSBP_p3_med = median(SYSBP_PERIOD3, na.rm = TRUE),
-#     SYSBP_change_abs = SYSBP_p3_med - SYSBP_p1_med,
-#     SYSBP_change_pct = (SYSBP_change_abs / SYSBP_p1_med) * 100,
-#     
-#     # BMI
-#   )
+fmhst_long <- fmhst_raw %>%
+  filter(PERIOD %in% c(1,2,3)) %>%
+  mutate(
+    SEX = factor(SEX, levels = c(1,2), labels = c("Men", "Women")),
+    PERIOD = factor(PERIOD, labels = c("Exam 1", "Exam 2", "Exam 3")),
+    DIABETES = factor(DIABETES, levels = c(0,1), labels = c("No","Yes")),
+    CURSMOKE = factor(CURSMOKE, levels = c(0,1), labels = c("No","Yes")))
+
+summary_tbl <- fmhst_long %>%
+  group_by(SEX, PERIOD) %>%
+  summarise(
+    Age = sprintf("%.1f (%.1f)", mean(AGE, na.rm = T), sd(AGE, na.rm = T)),
+    SBP = sprintf("%.1f (%.1f)", mean(SYSBP, na.rm = T), sd(SYSBP, na.rm = T)),
+    Diabetes = sprintf("%.1f%%", mean(DIABETES == "Yes", na.rm = T) * 100),
+    Smoker = sprintf("%.1f%%", mean(CURSMOKE == "Yes", na.rm = T) * 100),
+    .groups = "drop")
+
+summary_wide <- summary_tbl %>%
+  pivot_wider(
+    names_from = SEX,
+    values_from = c(Age, SBP, Diabetes, Smoker),
+    names_vary = "slowest") %>%
+  rename(Period = PERIOD)
+
 ```
 
+```{r label = "Used in final report as Table 4"}
+summary_gt <- summary_wide %>%
+  gt() %>%
+  tab_header(
+    title = "Risk Factor Distributions Across Examination Periods by Sex") %>%
+  cols_label(
+    Period = "Period",
+    Age_Men = "Age",
+    SBP_Men = "SBP",
+    Diabetes_Men = "Diabetes",
+    Smoker_Men = "Smoker",
+    Age_Women = "Age",
+    SBP_Women = "SBP",
+    Diabetes_Women = "Diabetes",
+    Smoker_Women = "Smoker") %>%
+  tab_spanner(
+    label = "Men",
+    columns = c(Age_Men, SBP_Men, Diabetes_Men, Smoker_Men)) %>%
+  tab_spanner(
+    label = "Women",
+    columns = c(Age_Women, SBP_Women, Diabetes_Women, Smoker_Women)) %>%
+  cols_align(align = "left", columns = Period) %>%
+  cols_align(align = "center", columns = -Period) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_spanners()) %>% 
+  tab_options(
+    table.width = pct(65),
+    heading.align = "left",
+    table.font.size = px(12),
+    data_row.padding = px(4),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+summary_gt
+```
 
 
 
