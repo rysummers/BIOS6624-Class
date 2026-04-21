@@ -767,17 +767,80 @@ Systolic BP was positively associated with stroke risk in women, with each 1 mmH
 
 Systolic BP was positively associated with stroke risk in men, with each 1 mmHg increase corresponding to a 3.5% increase in hazard (HR = 1.0352; 95% CI: 1.023–1.048). This corresponds to approximately a 41.3% ($1.035^{10} ≈ 1.413$) increase in hazard per 10 mmHg increase.
 
+Plot the interaction term (Men)
+```{r}
+newdata <- expand.grid(
+  SYSBP_10 = seq(12, 25, by = 1),   # 120–250 mmHg
+  BPMEDS = factor(c("No", "Yes"), levels = c("No", "Yes")),
+  AGE = 60,
+  DIABETES = "No",
+  CURSMOKE = "No",
+  PREVCHD = "No")
+
+sf <- survfit(cox.men.final, newdata = newdata)
+surv_10y <- summary(sf, times = 10*365.25, extend = TRUE)
+
+surv_vals <- as.numeric(drop(surv_10y$surv))
+plot_df <- cbind(newdata, surv = surv_vals)
+plot_df$risk <- 1 - plot_df$surv
+
+# Build plotting data
+plot_df$SYSBP <- plot_df$SYSBP_10 * 10
+
+# Split by medication group
+plot_no  <- subset(plot_df, BPMEDS == "No")
+plot_yes <- subset(plot_df, BPMEDS == "Yes")
+
+# Base R plot
+plot(
+  plot_no$SYSBP, plot_no$risk,
+  type = "l",
+  lwd = 2,
+  col = "#0072B2",
+  ylim = range(plot_df$risk),
+  xlab = "Systolic Blood Pressure (mmHg)",
+  ylab = "Predicted 10-year stroke risk",
+  main = "Men: Interaction of SBP and BP Medication")
+
+lines(
+  plot_yes$SYSBP, plot_yes$risk,
+  lwd = 2,
+  col = "#D55E00")
+
+legend(
+  "topleft",
+  legend = c("No BP medication", "On BP medication"),
+  col = c("#0072B2", "#D55E00"),
+  lwd = 2,
+  bty = "n")
+```
+
+
 #### Proportionality Check
 ```{r}
 ph_women <- cox.zph(cox.women.final)
-ph_women
+ph_women$table %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Variable") %>%
+  as_tibble() %>%
+  gt() %>% 
+  fmt_number(columns = c(chisq), decimals = 2) %>%
+  fmt_number(columns = p, decimals = 3) %>% 
+  tab_header(title = "Proportionality Test: Women")
 par(mfrow = c(3, 3), mar = c(4, 4, 2, 2)) # c(bottom, left, top, right)
 plot(ph_women)
 ```
 
 ```{r}
 ph_men <- cox.zph(cox.men.final)
-ph_men
+ph_men$table %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Variable") %>%
+  as_tibble() %>%
+  gt() %>% 
+  fmt_number(columns = c(chisq), decimals = 2) %>%
+  fmt_number(columns = p, decimals = 3) %>% 
+  tab_header(title = "Proportionality Test: Men")
 par(mfrow = c(3, 3), mar = c(4, 4, 2, 2)) # c(bottom, left, top, right)
 plot(ph_men)
 ```
@@ -842,6 +905,52 @@ tbl_final <- full_join(tbl_women, tbl_men, by = "term") %>%
 tbl_final
 ```
 
+```{r}
+
+# categorical variables to report
+cat_vars <- c("BPMEDS", "DIABETES", "CURSMOKE", "PREVCHD")
+
+# map raw variable names to the exact row labels in tbl_final
+risk_factor_map <- c(
+  BPMEDS   = "BP meds (Yes vs No)",
+  DIABETES = "Diabetes (Yes vs No)",
+  CURSMOKE = "Current smoker (Yes vs No)",
+  PREVCHD  = "Cardiovascular Disease (Yes vs No)")
+
+events_cat <- fmhst_filt %>%
+  select(SEX, STROKE_10y, all_of(cat_vars)) %>%
+  pivot_longer(
+    cols = all_of(cat_vars),
+    names_to = "variable",
+    values_to = "value") %>%
+  mutate(value = as.character(value)) %>%
+  group_by(variable, SEX, value) %>%
+  summarise(
+    n = n(),
+    events = sum(STROKE_10y == "Yes", na.rm = TRUE),
+    .groups = "drop") %>%
+  # keep only the Yes level if your variables are Yes/No
+  filter(value == "Yes") %>%
+  mutate(
+    event_txt = paste0(events, "/", n),
+    `Risk factor` = recode(variable, !!!risk_factor_map)) %>%
+  select(`Risk factor`, SEX, event_txt) %>%
+  pivot_wider(
+    names_from = SEX,
+    values_from = event_txt,
+    names_prefix = "",
+    names_glue = "{SEX}_Events")
+
+events_cat
+
+tbl_final2 <- tbl_final %>%
+  left_join(events_cat, by = "Risk factor") %>%
+  mutate(
+    Women_Events = coalesce(Women_Events, ""),
+    Men_Events   = coalesce(Men_Events, ""))
+```
+
+
 
 ```{r label = "Used in final report as Table 2"}
 gt_tbl <- tbl_final %>%
@@ -879,8 +988,8 @@ gt_tbl <- tbl_final %>%
       rows = `Risk factor` %in% c("BP meds (Yes vs No)", 
                                   "SBP × BP meds interaction"))) %>% 
   tab_options(
-    table.width = pct(88),
-    table.font.size = px(13),
+    table.width = pct(95),
+    table.font.size = px(15),
     heading.align = "left",
     data_row.padding = px(5),
     table.border.top.width = px(2),
@@ -889,13 +998,99 @@ gt_tbl <- tbl_final %>%
 gt_tbl 
 ```
 
+
+```{r}
+gt_tbl <- tbl_final2 %>%
+  mutate(
+    Men_HR_CI = if_else(
+      `Risk factor` == "BP meds (Yes vs No)", "\u2020", Men_HR_CI),
+    Men_Pct = if_else(
+      `Risk factor` == "BP meds (Yes vs No)", "\u2020", Men_Pct),
+    Women_Events = coalesce(Women_Events, ""),
+    Men_Events   = coalesce(Men_Events, "")) %>%
+  select(
+    `Risk factor`,
+    Women_Events, Women_HR_CI, Women_Pct,
+    Men_Events, Men_HR_CI, Men_Pct) %>%
+  
+   mutate(
+    Women_HR_CI = str_replace(Women_HR_CI, " \\(", "\n("),
+    Men_HR_CI   = str_replace(Men_HR_CI, " \\(", "\n(")) %>% 
+  
+  gt() %>%
+  
+  cols_align(align = "center",columns = c(Women_HR_CI, Men_HR_CI)) %>%
+  text_transform(
+    locations = cells_body(columns = c(Women_HR_CI, Men_HR_CI)),
+    fn = function(x) {
+      gsub("\n", "<br>", x)
+    }
+  ) %>%
+  cols_align(align = "center", columns = c(Women_HR_CI, Men_HR_CI)) %>% 
+  
+  
+  tab_header(
+    title = "Hazard Ratios and Percent Change in Stroke Hazard by Sex") %>%
+  cols_label(
+    `Risk factor`  = "Risk factor",
+    Women_Events   = "Events",
+    Women_HR_CI    = "HR (95% CI; P-val)",
+    Women_Pct      = "%Δ in Hazard",
+    Men_Events     = "Events",
+    Men_HR_CI      = "HR (95% CI; P-val)",
+    Men_Pct        = "%Δ in Hazard") %>%
+  tab_spanner(
+    label = paste0("Women (N=", cox.women.final$n, ")"),
+    columns = c(Women_Events, Women_HR_CI, Women_Pct)) %>%
+  tab_spanner(
+    label = paste0("Men (N=", cox.men.final$n, ")"),
+    columns = c(Men_Events, Men_HR_CI, Men_Pct)) %>%
+  cols_align(align = "left",columns = `Risk factor`) %>%
+  cols_align(
+    align = "center",
+    columns = c(Women_Events, Women_HR_CI, Women_Pct,
+                Men_Events, Men_HR_CI, Men_Pct)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(everything())) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_spanners()) %>%
+  tab_footnote(
+    footnote = md(
+      "\u2020 Because the BP \u00d7 BP medication interaction was significant in men, 
+      the effect of BP meds depends on BP and is not summarized as a single hazard ratio."
+    ),
+    locations = cells_body(
+      columns = c(Men_HR_CI, Men_Pct),
+      rows = `Risk factor` %in% c(
+        "BP meds (Yes vs No)",
+        "SBP × BP meds interaction"
+      ))) %>%
+  tab_options(
+    table.width = pct(97),
+    table.font.size = px(15),
+    heading.align = "left",
+    data_row.padding = px(5),
+    table.border.top.width = px(2),
+    table.border.bottom.width = px(2))
+
+gt_tbl
+```
+
+
+
+
+
+
+
 Review the number of events within risk stratifications to validate comment on lower
 power in the report
 ```{r}
 # Women
 fmhst_filt %>%
   filter(SEX == "Women") %>%
-  group_by(PREVCHD) %>%
+  group_by(DIABETES) %>%
   summarise(
     n = n(),
     events = sum(STROKE_10y == "Yes"),
@@ -904,7 +1099,7 @@ fmhst_filt %>%
 # Men
 fmhst_filt %>%
   filter(SEX == "Men") %>%
-  group_by(PREVCHD) %>%
+  group_by(DIABETES) %>%
   summarise(
     n = n(),
     events = sum(STROKE_10y == "Yes"),
@@ -1062,7 +1257,8 @@ plot_df <- risk_table %>%
       scenario,
       levels = c("Baseline", "High BP", "Diabetes", 
                  "Diabetes + High BP", "Smoker + Diabetes + High BP")),
-    age = factor(age, levels = c("Age 40", "Age 50", "Age 60")))
+    age = factor(age, levels = c("Age 40", "Age 50", "Age 60")),
+    sex = factor(sex, levels = c("Women", "Men")))
 
 ggplot(plot_df, aes(x = scenario, y = risk, fill = age)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.7) +
@@ -1116,25 +1312,28 @@ summary_wide <- summary_tbl %>%
 
 ```{r label = "Used in final report as Table 4"}
 summary_gt <- summary_wide %>%
+  select(Period,
+    Age_Women, SBP_Women, Diabetes_Women, Smoker_Women,
+    Age_Men, SBP_Men, Diabetes_Men, Smoker_Men) %>% 
   gt() %>%
   tab_header(
     title = "Risk Factor Distributions Across Examination Periods by Sex") %>%
   cols_label(
     Period = "Period",
-    Age_Men = "Age",
-    SBP_Men = "SBP",
-    Diabetes_Men = "Diabetes",
-    Smoker_Men = "Smoker",
     Age_Women = "Age",
     SBP_Women = "SBP",
     Diabetes_Women = "Diabetes",
-    Smoker_Women = "Smoker") %>%
-  tab_spanner(
-    label = "Men",
-    columns = c(Age_Men, SBP_Men, Diabetes_Men, Smoker_Men)) %>%
+    Smoker_Women = "Smoker",
+    Age_Men = "Age",
+    SBP_Men = "SBP",
+    Diabetes_Men = "Diabetes",
+    Smoker_Men = "Smoker") %>%
   tab_spanner(
     label = "Women",
     columns = c(Age_Women, SBP_Women, Diabetes_Women, Smoker_Women)) %>%
+  tab_spanner(
+    label = "Men",
+    columns = c(Age_Men, SBP_Men, Diabetes_Men, Smoker_Men)) %>%
   cols_align(align = "left", columns = Period) %>%
   cols_align(align = "center", columns = -Period) %>%
   tab_style(
@@ -1153,13 +1352,6 @@ summary_gt <- summary_wide %>%
 
 summary_gt
 ```
-
-
-
-
-
-
-
 
 
 
