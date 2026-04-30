@@ -1,0 +1,652 @@
+---
+title: 'BIOS 6624 : Project 4'
+author: "Ryan Summers"
+date: "2026-04-28"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(ggplot2)
+library(tidyverse)
+library(magrittr)
+library(ggfortify)
+library(olsrr)
+library(kableExtra)
+library(doBy)
+library(MASS)
+library(dplyr)
+library(table1)
+library(gtsummary)
+library(gt)
+library(stringdist)
+library(ggrepel)
+library(lme4)
+library(lmerTest)
+```
+
+
+## **2. Methods**
+
+### **2.1 Data-Generating Mechanisms**
+
+Data for this simulation study will be generated using the `hdrm` package available on GitHub. This package allows for flexible simulation of regression data under specified parameter settings, including control over the number of predictors, coefficient values, and correlation structure among predictors.
+
+For each simulated dataset, the outcome will be generated according to the linear regression model:
+
+$$
+Y = X\beta + \epsilon
+$$
+
+where ($\epsilon \sim N(0, \sigma^2)$), and ($X$) is an ($N \times 20$) matrix of continuous predictor variables.
+
+A total of 20 predictors will be included in each dataset. Of these, five predictors ((X_1) through ($X_5$)) will be truly associated with the outcome, while the remaining fifteen predictors (($X_6$) through ($X_{20})$) will have no association (i.e., their coefficients will be zero).
+
+The true regression coefficients for the five relevant predictors will be specified as:
+
+$$
+\beta = \left( \frac{0.5}{3}, \frac{1}{3}, \frac{1.5}{3}, \frac{2}{3}, \frac{2.5}{3} \right)
+$$
+
+All predictors will be generated as continuous variables.
+
+To evaluate the impact of predictor correlation, an exchangeable correlation structure will be imposed such that all pairwise correlations between predictors are equal to a constant value ( $\rho $). Three correlation levels will be considered:
+
+* ( $\rho = 0$ ) (independent predictors)
+* ( $\rho = 0.35$ ) (moderate correlation)
+* ( $\rho = 0.70$ ) (strong correlation)
+
+Two sample sizes will be evaluated: (N = 250) and (N = 500), resulting in a total of six simulation scenarios formed by the combination of sample size and correlation level.
+
+The variance of the error term (($\sigma^2$)) will be specified such that a moderate signal-to-noise ratio is maintained. (You can optionally specify this later if your group decides.)
+
+Each simulation scenario will be replicated a large number of times (e.g., 1,000 iterations) to ensure stable estimation of performance measures.
+
+---
+
+### **2.2 Model Fitting Procedures**
+
+For each simulated dataset, all 20 predictors will initially be included in the full model. The following five model selection approaches will be applied:
+
+#### **1. Backward Selection (F-tests / p-values)**
+
+A backward elimination procedure will be performed starting from the full model. At each step, the predictor with the largest p-value will be removed, provided that its p-value exceeds a predefined significance threshold of ( $\alpha = 0.05$ ). This process will continue until all remaining predictors are statistically significant.
+
+---
+
+#### **2. Akaike Information Criterion (AIC)**
+
+Model selection will be performed by identifying the model that minimizes the AIC. A stepwise selection procedure (both backward or stepwise) will be used to search the model space.
+
+---
+
+#### **3. Bayesian Information Criterion (BIC)**
+
+Model selection will be performed by identifying the model that minimizes the BIC, using a similar stepwise search strategy as for AIC. Because BIC imposes a stronger penalty for model complexity, it is expected to favor more parsimonious models.
+
+---
+
+#### **4. Lasso Regression**
+
+Lasso regression will be implemented using penalized least squares with an ($L_1$) penalty on the regression coefficients. This approach performs variable selection by shrinking some coefficients exactly to zero.
+
+The regularization parameter ( $\lambda $) will be selected using **k-fold cross-validation (e.g., 10-fold)**. Two selection rules will be evaluated:
+
+* ( $\lambda_{\text{min}}$ ): value minimizing cross-validated prediction error
+* ( $\lambda_{\text{1se}}$ ): largest value within one standard error of the minimum
+
+These choices allow comparison between more complex and more parsimonious models.
+
+---
+
+#### **5. Elastic Net Regression**
+
+Elastic net regression will be implemented using a combination of ($L_1$) and ($L_2$) penalties. This method is particularly useful in the presence of correlated predictors, as it tends to select groups of related variables.
+
+The mixing parameter ( $\alpha$ ) will be fixed at a value (e.g., ( $\alpha = 0.5$ )) to balance the lasso and ridge penalties. Sensitivity analyses may be considered for alternative values of ( $\alpha$ ).
+
+As with lasso, the regularization parameter ( $\lambda$ ) will be selected using k-fold cross-validation with both:
+
+* ( $\lambda_{\text{min}}$ )
+* ( $\lambda_{\text{1se}}$ )
+
+---
+
+## 🔑 Why this improves your paper
+
+This revision fixes the biggest weaknesses:
+
+✔ Explicitly names **hdrm (required by assignment)**
+✔ Specifies **exact parameter values (β, N, p, ρ)**
+✔ Defines **how correlation is induced (exchangeable)**
+✔ Clearly states **algorithm choices (stepwise, CV, λ rules)**
+✔ Makes the study **fully reproducible** (huge grading point)
+
+---
+
+## 👍 Optional (but strong bonus if you include)
+
+You could add one sentence like:
+
+> “All simulations and analyses will be conducted in R, and code will be 
+structured to allow reproducibility across simulation scenarios.”
+
+
+
+---
+
+
+
+
+
+-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
+
+
+
+---
+
+# **DATA ANALYSIS PLAN**
+
+### Investigation of Variable Selection Algorithms in Linear Regression
+
+---
+
+## **1. Introduction**
+
+Simulation studies are commonly used in statistical methodology to evaluate the 
+performance of analytic techniques under controlled conditions in which the true data-generating mechanism is known. This allows for direct assessment of 
+statistical properties such as bias, variability, variable selection accuracy,
+and confidence interval performance.
+
+The objective of this project is to investigate and compare the performance of 
+several commonly used variable selection methods in the context of linear 
+regression. Specifically, this study will evaluate backward selection based on 
+hypothesis testing, model selection using Akaike Information Criterion (AIC) and
+Bayesian Information Criterion (BIC), and penalized regression approaches 
+including the lasso and elastic net. These methods will be assessed under varying
+sample sizes and levels of correlation among predictors.
+
+The primary research question guiding this analysis is:
+
+> How do different variable selection methods perform in identifying true predictors and excluding irrelevant predictors in linear regression models under varying sample sizes and correlation structures?
+
+A secondary objective is to evaluate the statistical properties of parameter estimates obtained after model selection, including bias, confidence interval coverage, and type I and type II error rates.
+
+This simulation study is structured using the ADEMP framework (Aims, Data-generating mechanisms, Estimands, Methods, Performance measures), which provides a systematic approach to the design and reporting of simulation studies.
+
+---
+
+## **2. Methods**
+
+### **2.1 Data-Generating Mechanisms**
+
+Data for this simulation study will be generated using the hdrm package available 
+on GitHub. This package allows for flexible simulation of regression data under 
+specified parameter settings, including control over the number of predictors, 
+coefficient values, and correlation structure among predictors.
+
+For each simulated dataset, the outcome will be generated according to the 
+linear regression model:
+
+$$
+Y = X\beta + \epsilon
+$$
+
+where ($Y$) is the outcome variable, ($X$) is a matrix of predictor variables, ($\beta$) is the vector of regression coefficients, and ($\epsilon$) is a normally distributed error term with mean zero and constant variance.
+
+Each simulated dataset will include 20 continuous predictor variables. Of these, five variables (($X_1$) through ($X_5$)) will be truly associated with the outcome, while the remaining fifteen variables will have no association (i.e., their true coefficients will be zero). The true regression coefficients for the five relevant predictors will be specified as:
+
+$$
+\beta = \left( \frac{0.5}{3}, \frac{1}{3}, \frac{1.5}{3}, \frac{2}{3}, \frac{2.5}{3} \right)
+$$
+
+This structure allows for evaluation of variable selection performance across a range of effect sizes.
+
+To assess the impact of predictor correlation, an exchangeable correlation structure will be imposed on the predictor variables such that all pairwise correlations are equal to a constant value ( $\rho $). Three levels of correlation will be considered: ( $\rho = 0$ ) (independent predictors), ( $\rho = 0.35$ ) (moderate correlation), and ( $\rho = 0.70$ ) (strong correlation).
+
+Two sample sizes will be evaluated: ($N = 250$) and ($N = 500$). These design factors will be combined in a fully factorial manner, resulting in six distinct simulation scenarios.
+
+For each scenario, a large number of simulated datasets (e.g., 1,000 repetitions) will be generated to ensure stable estimation of performance metrics. The number of simulations may be adjusted to ensure adequate precision, as quantified by Monte Carlo standard errors.
+
+---
+
+### **2.2 Methods**
+
+For each simulated dataset, all 20 predictors will initially be included in the model. The following variable selection methods will then be applied:
+
+1. **Backward Selection (Hypothesis Testing)**
+   A backward elimination procedure will be performed using statistical significance testing. Predictors will be sequentially removed based on the largest p-value, using a significance threshold of ( $\alpha = 0.05$ ).
+
+2. **Akaike Information Criterion (AIC)**
+   Models will be selected by minimizing the AIC, which balances model fit and complexity.
+
+3. **Bayesian Information Criterion (BIC)**
+   Models will be selected by minimizing the BIC, which imposes a stronger penalty for model complexity than AIC.
+
+4. **Lasso Regression**
+   The lasso method imposes an ($L_1$) penalty on regression coefficients, shrinking some coefficients to exactly zero and thus performing variable selection.
+
+5. **Elastic Net Regression**
+   The elastic net combines ($L_1$) and ($L_2$) penalties and is particularly useful when predictors are correlated, as it tends to select groups of related variables.
+
+For both lasso and elastic net, the regularization parameter ($\lambda$) will be selected using cross-validation. Two common selection rules will be evaluated: the value of ($\lambda$) that minimizes cross-validated prediction error ($\lambda_{min}$) and the largest value within one standard error of the minimum ($\lambda_{1se}$). For the elastic net, the mixing parameter will be fixed at a value (e.g., ($\alpha = 0.5$)), with potential sensitivity analyses considered.
+
+---
+
+### **2.3 Estimands**
+
+The primary estimands of interest in this simulation study include:
+
+* The probability that each predictor is selected into the final model
+* The regression coefficients for selected variables
+* The coverage probability of nominal 95% confidence intervals
+* Type I and type II error rates for hypothesis testing
+
+Because the true model is known, these quantities can be directly evaluated across simulation repetitions.
+
+---
+
+### **2.4 Performance Measures**
+
+Performance will be evaluated across several domains.
+
+#### **Variable Selection Performance**
+
+The ability of each method to correctly identify relevant predictors will be assessed using:
+
+* True positive rate (proportion of true predictors selected)
+* False positive rate (proportion of null predictors selected)
+* Sensitivity and specificity
+* Confusion matrix summaries
+
+#### **Estimation Performance**
+
+For predictors retained in the final model, estimation accuracy will be evaluated using:
+
+* Bias of regression coefficient estimates
+* Mean squared error
+
+#### **Inference Performance**
+
+The validity of statistical inference will be assessed by:
+
+* Coverage probability of 95% confidence intervals
+* Type I error rate (false detection of null variables)
+* Type II error rate (failure to detect true variables)
+
+#### **Model Complexity**
+
+The average number of predictors included in the final model will be recorded to assess model parsimony.
+
+#### **Monte Carlo Uncertainty**
+
+For each performance measure, Monte Carlo standard errors will be computed to quantify uncertainty due to the finite number of simulations.
+
+---
+
+### **2.5 Post-Selection Inference**
+
+Inference following variable selection is known to be biased when standard methods are applied without adjustment. In this study, a pragmatic approach will be used in which the final selected model is refit using ordinary least squares, and standard errors and confidence intervals are computed as if the model had been specified a priori.
+
+The resulting bias and coverage properties will be evaluated empirically. Limitations of this approach will be acknowledged, and results will be interpreted with caution. Alternative post-selection inference methods may be discussed as extensions but will not be the primary focus of the analysis.
+
+---
+
+## **3. Analysis Plan**
+
+For each simulation scenario, the following steps will be performed:
+
+1. Generate a dataset according to the specified data-generating mechanism
+2. Apply each variable selection method
+3. Record selected variables, estimated coefficients, and inferential statistics
+4. Repeat the process across all simulation iterations
+
+After all simulations are completed, performance measures will be summarized across repetitions. Results will be compared across methods, sample sizes, and correlation structures.
+
+---
+
+## **4. Presentation of Results**
+
+Results will be presented using a combination of tables and graphical summaries. Tables will report performance metrics for each method across all simulation scenarios. Graphical displays may include plots of selection probabilities, false positive rates, and bias across varying conditions.
+
+Comparisons between methods will focus on trade-offs between variable selection accuracy, estimation bias, and inferential validity.
+
+---
+
+
+--------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+
+> **Aims, Data-generating mechanisms, Estimands, Methods, Performance measures** 
+
+Below is a revised version of your plan with **targeted upgrades based on Morris et al.** (this is what your professor is looking for).
+
+---
+
+# Revised Data Analysis Plan (Aligned with Morris et al.)
+
+## 1. Introduction
+
+Simulation studies are used to evaluate statistical methods under controlled conditions where the true data-generating mechanism is known . This allows direct assessment of properties such as bias, variable selection accuracy, and confidence interval performance.
+
+The objective of this study is to compare several variable selection methods in linear regression under varying sample sizes and correlation structures. Specifically, we evaluate how well each method:
+
+* Identifies true predictors
+* Avoids selecting irrelevant predictors
+* Produces unbiased and reliable parameter estimates after selection
+
+This study follows the **ADEMP framework** recommended by Morris et al. for planning and reporting simulation studies.
+
+---
+
+# 2. Methods (ADEMP Framework)
+
+## 2.1 Aims
+
+Following Morris et al., simulation aims should be explicitly tied to statistical properties .
+
+### Primary aims:
+
+1. Evaluate **variable selection performance** (true/false positives)
+2. Compare **estimation accuracy** (bias, variance)
+3. Assess **inferential validity** (confidence interval coverage, type I/II error)
+
+### Secondary aim:
+
+* Evaluate robustness of methods under **increasing multicollinearity**
+
+---
+
+## 2.2 Data-Generating Mechanisms
+
+Morris emphasizes that this is the **most important design component** .
+
+### Model:
+
+$$
+Y = X\beta + \epsilon, \quad \epsilon \sim N(0, \sigma^2)
+$$
+
+* (p = 20) predictors (all continuous)
+* 5 true predictors:
+  $\beta = (0.5/3, 1/3, 1.5/3, 2/3, 2.5/3)$
+* Remaining 15 coefficients = 0
+
+### Correlation structure (UPDATED):
+
+Exchangeable:
+
+$$
+Cor(X_j, X_k) = \rho \quad \forall j \neq k
+$$
+
+$$
+\rho = 0,\ 0.35,\ 0.70
+$$
+
+### Sample sizes:
+
+* ($N = 250$)
+* ($N = 500$)
+
+### Scenarios (factorial design — recommended by Morris):
+
+| N   | Correlation |
+| --- | ----------- |
+| 250 | 0           |
+| 250 | 0.35        |
+| 250 | 0.70        |
+| 500 | 0           |
+| 500 | 0.35        |
+| 500 | 0.70        |
+
+✔ This is now a **fully factorial design**, which Morris strongly recommends.
+
+### Simulation size:
+
+* ($n_{sim} = 1000$) (to be justified via Monte Carlo error)
+
+Morris explicitly stresses reporting **Monte Carlo uncertainty**, which is often ignored .
+
+---
+
+## 2.3 Estimands (NEW — this is what you were missing)
+
+Morris stresses defining *what exactly you are estimating*.
+
+### Estimands include:
+
+1. **Selection probabilities**
+   [
+   P(\text{variable selected})
+   ]
+
+2. **Regression coefficients**
+   [
+   \beta_j
+   ]
+
+3. **Confidence interval coverage**
+   [
+   P(\beta_j \in CI)
+   ]
+
+4. **Error rates**
+
+   * Type I error (null variables selected/significant)
+   * Type II error (true variables missed)
+
+---
+
+## 2.4 Methods
+
+The following methods will be compared:
+
+### Classical methods:
+
+* Backward selection (p-values / F-tests)
+* AIC
+* BIC
+
+### Penalized methods:
+
+* Lasso (L1 penalty)
+  → produces sparse models by shrinking some coefficients to zero 
+
+* Elastic Net
+  → handles correlated predictors via grouping effect 
+
+### Lambda selection:
+
+* ( $\lambda_{min}$ )
+* ( $\lambda_{1se}$ )
+
+(✔ Good — this matches best practice and your professor’s request)
+
+---
+
+## 2.5 Performance Measures (CRITICAL — Morris focus)
+
+Morris emphasizes clearly defining and justifying performance metrics.
+
+### 1. Variable selection performance
+
+* True positive rate (sensitivity)
+* False positive rate
+* Specificity
+* Confusion matrix (recommended in similar simulation work) 
+
+---
+
+### 2. Estimation performance
+
+* Bias:
+  [
+  E(\hat{\beta}_j - \beta_j)
+  ]
+
+* Variance / MSE
+
+---
+
+### 3. Inference performance
+
+* 95% CI coverage
+* Type I error
+* Type II error
+
+---
+
+### 4. Model size
+
+* Average number of selected predictors
+
+---
+
+### 5. Monte Carlo uncertainty (NEW — IMPORTANT)
+
+For each metric, report:
+
+$$
+MCSE = \sqrt{\frac{\hat{Var}}{n_{sim}}}
+$$
+
+Morris explicitly states that simulation results are **estimates with uncertainty** and must be reported as such.
+
+---
+
+## 2.6 Post-Selection Inference (STRONG UPGRADE)
+
+Your original plan mentioned bias — now we formalize it using literature.
+
+Standard inference after selection is **invalid** because:
+
+* Selection induces bias
+* P-values are too small
+* Coverage is too low
+
+This is well documented in post-selection inference literature .
+
+### Planned approaches:
+
+1. **Naive approach (baseline)**
+
+   * Refit model after selection
+   * Report bias + coverage (expected to fail)
+
+2. **Optional extension**
+
+   * Discuss selective inference or debiased lasso as alternatives
+
+---
+
+# 3. Analysis Plan
+
+For each simulation:
+
+1. Generate dataset
+2. Apply each method
+3. Record:
+   * Selected variables
+   * Coefficients
+   * CI and p-values
+4. Store results
+
+After all simulations:
+
+* Compute averages of all performance metrics
+* Compute Monte Carlo SEs
+* Compare methods across scenarios
+
+---
+
+# 4. Presentation of Results (Morris-aligned)
+
+Morris emphasizes **clear comparative tables and graphics**.
+
+### Tables:
+
+* Performance metrics by method × scenario
+* Bias + coverage per variable
+
+### Figures:
+
+* Selection probability vs true β
+* False positive rates
+* Effect of correlation
+
+---
+
+Got it — update the plan as follows:
+
+### Key revisions to include
+
+Use **exchangeable correlation** instead of AR(1):
+
+[
+Cor(X_j, X_k)=\rho \quad \text{for all } j \ne k
+]
+
+with three correlation scenarios:
+
+[
+\rho = 0,\quad 0.35,\quad 0.70
+]
+
+All predictors will be continuous.
+
+The true beta values should remain:
+
+[
+0.5/3,\ 1/3,\ 1.5/3,\ 2/3,\ 2.5/3
+]
+
+The simulation factors are now:
+
+| Factor           | Levels                                                |
+| ---------------- | ----------------------------------------------------- |
+| Sample size      | 250, 500                                              |
+| Correlation      | 0, 0.35, 0.70                                         |
+| Selection method | Backward p-value/F-test, AIC, BIC, lasso, elastic net |
+| Lambda rule      | To be chosen for lasso and elastic net                |
+
+This gives:
+
+[
+2 \times 3 = 6
+]
+
+main data-generating scenarios, with each selection method applied within each scenario.
+
+### Revised sentence for simulation design
+
+Replace the earlier correlation paragraph with:
+
+> Predictor variables will be generated as continuous variables using an exchangeable correlation structure. Under this structure, all pairs of predictors will have the same pairwise correlation, ( \rho ). Three correlation scenarios will be evaluated: ( \rho = 0 ), representing independent predictors; ( \rho = 0.35 ), representing moderate correlation; and ( \rho = 0.70 ), representing strong correlation. The true regression coefficients will remain unchanged across all scenarios.
+
+### Revised scenario table
+
+| Scenario |   N | Number of Predictors | True Predictors | Correlation |
+| -------- | --: | -------------------: | --------------: | ----------: |
+| 1        | 250 |                   20 |               5 |           0 |
+| 2        | 250 |                   20 |               5 |        0.35 |
+| 3        | 250 |                   20 |               5 |        0.70 |
+| 4        | 500 |                   20 |               5 |           0 |
+| 5        | 500 |                   20 |               5 |        0.35 |
+| 6        | 500 |                   20 |               5 |        0.70 |
+
+### For lambda selection
+
+I’d write this conservatively for now:
+
+> For lasso and elastic net, lambda will be selected using cross-validation. At least two lambda-selection rules will be compared: ( \lambda_{\min} ), which minimizes cross-validated prediction error, and ( \lambda_{1se} ), which selects the most regularized model within one standard error of the minimum. Final lambda-selection choices will be confirmed with the project group.
+
+Two important interpretation notes for your write-up:
+1. Bias and coverage here are conditional on selection, because they are only computed after a variable is retained and the final selected model is refit. That matches your assignment language: “For the variables that are retained in the model…”
+
+2. Type II error is defined as either failing to select a true variable or selecting it but failing to reject the null in the refit model. That is a stricter definition than selection alone, but it aligns with the professor’s request to evaluate testing after final model selection.
