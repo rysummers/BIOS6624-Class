@@ -3,8 +3,8 @@ title: 'BIOS 6624 : Project 4'
 author: "Ryan Summers"
 date: "2026-04-28"
 output:
-  word_document: default
   html_document: default
+  word_document: default
   pdf_document: default
 ---
 
@@ -126,8 +126,6 @@ This revision fixes the biggest weaknesses:
 ✔ Makes the study **fully reproducible** (huge grading point)
 
 ---
-
-## 👍 Optional (but strong bonus if you include)
 
 You could add one sentence like:
 
@@ -422,19 +420,14 @@ Morris stresses defining *what exactly you are estimating*.
 ### Estimands include:
 
 1. **Selection probabilities**
-   [
-   P(\text{variable selected})
-   ]
+   $P(\text{variable selected})$
 
 2. **Regression coefficients**
-   [
-   \beta_j
-   ]
+   $\beta_j$
+   
 
 3. **Confidence interval coverage**
-   [
-   P(\beta_j \in CI)
-   ]
+   $P(\beta_j \in CI)$
 
 4. **Error rates**
 
@@ -466,7 +459,6 @@ The following methods will be compared:
 * ( $\lambda_{min}$ )
 * ( $\lambda_{1se}$ )
 
-(✔ Good — this matches best practice and your professor’s request)
 
 ---
 
@@ -486,9 +478,7 @@ Morris emphasizes clearly defining and justifying performance metrics.
 ### 2. Estimation performance
 
 * Bias:
-  [
-  E(\hat{\beta}_j - \beta_j)
-  ]
+  $E(\hat{\beta}_j - \beta_j)$
 
 * Variance / MSE
 
@@ -588,23 +578,23 @@ Got it — update the plan as follows:
 
 Use **exchangeable correlation** instead of AR(1):
 
-[
+$$
 Cor(X_j, X_k)=\rho \quad \text{for all } j \ne k
-]
+$$
 
 with three correlation scenarios:
 
-[
+$$
 \rho = 0,\quad 0.35,\quad 0.70
-]
+$$
 
 All predictors will be continuous.
 
 The true beta values should remain:
 
-[
+$$
 0.5/3,\ 1/3,\ 1.5/3,\ 2/3,\ 2.5/3
-]
+$$
 
 The simulation factors are now:
 
@@ -617,9 +607,9 @@ The simulation factors are now:
 
 This gives:
 
-[
+$$
 2 \times 3 = 6
-]
+$$
 
 main data-generating scenarios, with each selection method applied within each scenario.
 
@@ -650,3 +640,462 @@ Two important interpretation notes for your write-up:
 1. Bias and coverage here are conditional on selection, because they are only computed after a variable is retained and the final selected model is refit. That matches your assignment language: “For the variables that are retained in the model…”
 
 2. Type II error is defined as either failing to select a true variable or selecting it but failing to reject the null in the refit model. That is a stricter definition than selection alone, but it aligns with the professor’s request to evaluate testing after final model selection.
+
+
+
+
+
+
+---
+
+#### **Table 1: Variable Selection Performance**
+
+| n   | ρ    | Method              | Sensitivity (TPR) | Specificity | False Positive Rate | Mean Model Size |
+| --- | ---- | ------------------- | ----------------- | ----------- | ------------------- | --------------- |
+| 250 | 0.00 | Backward (p-value)  | ...               | ...         | ...                 | ...             |
+| 250 | 0.00 | AIC                 | ...               | ...         | ...                 | ...             |
+| 250 | 0.00 | BIC                 | ...               | ...         | ...                 | ...             |
+| 250 | 0.00 | LASSO ($λ_{min}$)       | ...               | ...         | ...                 | ...             |
+| 250 | 0.00 | LASSO ($λ_{1se}$)       | ...               | ...         | ...                 | ...             |
+| 250 | 0.00 | Elastic Net ($λ_{min}$) | ...               | ...         | ...                 | ...             |
+| 250 | 0.00 | Elastic Net ($λ_{1se}$) | ...               | ...         | ...                 | ...             |
+
+---
+
+#### **Table 2: Estimation and Inference Performance (True Predictors Only)**
+
+| n   | ρ    | Method             | Mean Bias | MSE | Coverage (95% CI) | Type II Error |
+| --- | ---- | ------------------ | --------- | --- | ----------------- | ------------- |
+| 250 | 0.00 | Backward (p-value) | ...       | ... | ...               | ...           |
+| 250 | 0.00 | AIC                | ...       | ... | ...               | ...           |
+| ... | ...  | ...                | ...       | ... | ...               | ...           |
+
+---
+
+#### **Table 3: Performance for Null Predictors**
+
+| n   | ρ    | Method             | False Positive Rate | Type I Error | Coverage |
+| --- | ---- | ------------------ | ------------------- | ------------ | -------- |
+| 250 | 0.00 | Backward (p-value) | ...                 | ...          | ...      |
+| 250 | 0.00 | AIC                | ...                 | ...          | ...      |
+| ... | ...  | ...                | ...                 | ...          | ...      |
+
+---
+
+> Monte Carlo standard errors will be reported in parentheses for all performance measures.
+
+Example:
+
+```
+Sensitivity = 0.92 (0.01)
+```
+
+
+
+
+```{r}
+run_one_sim <- function(n, rho, sim_id) {
+  
+  # Simulate one dataset using hdrm
+  dat <- hdrm::gen_data(
+    n = n,
+    p = p,
+    p1 = p_true,
+    beta = beta_true,
+    family = "gaussian",
+    corr = "exchangeable",
+    rho = rho)
+  
+  # Extract outcome and predictors
+  y <- dat$y
+  X <- dat$X
+  
+  # Store simulated data in a data frame for lm-based methods
+  df <- data.frame(y = y, as.data.frame(X))
+  
+  # Fit full model with all 20 predictors
+  full_model <- lm(y ~ ., data = df)
+  
+  ############################################################
+  # Apply variable selection methods
+  ############################################################
+  
+  # 1. Backward selection using p-values / F-test approach
+  fit_p <- backward_pvalue(
+    full_model,
+    alpha_remove = alpha_pvalue)
+  selected_p <- get_selected_lm(fit_p)
+  
+  # 2. Backward selection using AIC
+  fit_aic <- MASS::stepAIC(
+    full_model,
+    direction = "backward",
+    trace = FALSE)
+  selected_aic <- get_selected_lm(fit_aic)
+  
+  # 3. Backward selection using BIC
+  fit_bic <- MASS::stepAIC(
+    full_model,
+    direction = "backward",
+    k = log(n),
+    trace = FALSE)
+  selected_bic <- get_selected_lm(fit_bic)
+  
+  # 4. LASSO and 5. Elastic Net
+  X_mat <- as.matrix(X)
+  
+  # LASSO: alpha = 1
+  cv_lasso <- cv.glmnet(
+    x = X_mat,
+    y = y,
+    alpha = 1,
+    nfolds = cv_folds,
+    standardize = TRUE)
+  
+  selected_lasso_min <- get_selected_glmnet(
+    cvfit = cv_lasso,
+    s_value = "lambda.min")
+  
+  selected_lasso_1se <- get_selected_glmnet(
+    cvfit = cv_lasso,
+    s_value = "lambda.1se")
+  
+  # Elastic Net: alpha = alpha_enet, usually 0.5
+  cv_enet <- cv.glmnet(
+    x = X_mat,
+    y = y,
+    alpha = alpha_enet,
+    nfolds = cv_folds,
+    standardize = TRUE)
+  
+  selected_enet_min <- get_selected_glmnet(
+    cvfit = cv_enet,
+    s_value = "lambda.min")
+  
+  selected_enet_1se <- get_selected_glmnet(
+    cvfit = cv_enet,
+    s_value = "lambda.1se")
+  
+  ############################################################
+  # Store selected variables from each method
+  ############################################################
+  
+  methods <- list(
+    backward_pvalue = selected_p,
+    backward_AIC = selected_aic,
+    backward_BIC = selected_bic,
+    lasso_lambda_min = selected_lasso_min,
+    lasso_lambda_1se = selected_lasso_1se,
+    elastic_net_lambda_min = selected_enet_min,
+    elastic_net_lambda_1se = selected_enet_1se)
+  
+  ############################################################
+  # Evaluate each method
+  ############################################################
+  
+  evals <- list()
+  
+  for (method_name in names(methods)) {
+    
+    selected_vars <- methods[[method_name]]
+    
+    evals[[method_name]] <- evaluate_method(
+      method_name = method_name,
+      selected_vars = selected_vars,
+      y = y,
+      X = X,
+      beta_true = beta_true)
+  }
+  
+  ############################################################
+  # Combine variable-level results
+  ############################################################
+  
+  variable_results <- bind_rows(
+    lapply(evals, function(x) x$variable_level)) %>%
+    mutate(
+      n = n,
+      rho = rho,
+      sim_id = sim_id)
+  
+  ############################################################
+  # Combine scenario-level results
+  ############################################################
+  
+  scenario_results <- bind_rows(
+    lapply(evals, function(x) x$scenario_level)) %>%
+    mutate(
+      n = n,
+      rho = rho,
+      sim_id = sim_id)
+  
+  ############################################################
+  # Return both result datasets
+  ############################################################
+  
+  list(
+    variable_results = variable_results,
+    scenario_results = scenario_results)
+}
+```
+
+
+
+
+Monte Carlo SE is:
+
+The standard deviation of your metric across simulations, divided by the square 
+root of the number of simulations
+
+For a metric $\hat{\theta}$:
+$$
+MCSE = \frac{SD(\hat{\theta}_1, \hat{\theta}_2, ..., \hat{\theta}_{n_{sim}})}{\sqrt{n_{sim}}}
+$$
+
+
+
+
+
+$$
+MCSE = \frac{SD(\text{metric across simulations})}{\sqrt{n_{sim}}}
+$$
+
+Works for:
+  * bias
+  * sensitivity
+  * model size
+  * MSE
+
+Best way to explain this 
+
+Monte Carlo standard errors are calculated as the standard deviation of a 
+performance metric across simulation runs divided by the square root of the 
+number of simulations.
+
+
+MCSE reflects how much a simulation estimate would vary if we repeated the entire 
+simulation study.
+
+
+Example:
+
+If you compute sensitivity across 10,000 runs: 
+sensitivity = c(0.8, 1, 0.9, 0.85, ...)
+
+Then: MCSE = sd(sensitivity) / sqrt(10000)
+
+
+Both criteria:
+$$
+\text{Criterion} = \text{Goodness of fit} + \text{Penalty for number of parameters}
+$$
+
+
+
+$$
+AIC = -2\log L + 2k
+$$
+  * k = number of parameters
+  * Penalty = 2 per parameter
+
+Focus: Predictive accuracy
+
+
+
+$$
+BIC = -2\log L + k \log(n)
+$$
+
+* Penalty = $log(n)$ per parameter
+
+Since:
+  * $\log(n) > 2$ when $n > 7$
+
+BIC penalizes complexity more heavily
+
+
+Behavior in your simulation	More variables kept	Fewer variables kept
+
+What you should expect in your results
+
+* AIC:
+    * Higher sensitivity (finds more true variables)
+    * Higher false positives
+* BIC:
+    * Lower false positives
+    * May miss some true variables
+
+
+AIC and BIC both balance model fit and complexity, but BIC applies a stronger 
+penalty for additional variables, especially as sample size increases. As a 
+result, AIC tends to select larger models, while BIC favors more parsimonious models.
+
+
+* AIC: “I care about prediction — include more variables”
+* BIC: “I want the simplest true model — be stricter”
+
+
+L1 (lasso) shrinks coefficients and can set them exactly to zero 
+(does variable selection), while
+L2 (ridge) shrinks coefficients toward zero but never exactly to zero 
+(keeps all variables).
+
+
+L1 penalty (LASSO)
+
+$$\lambda \sum |\beta_j|$$
+
+Penalizes the absolute values
+
+L2 penalty (Ridge)
+
+$$\lambda \sum \beta_j^2$$
+
+
+L1 penalty → “sharp corners”
+
+* Encourages coefficients to hit exactly 0
+* Drops variables completely
+
+L2 penalty → “smooth shrinking”
+
+* Shrinks everything gradually
+* Never fully removes variables
+
+
+Elastic Net = combination
+$$
+\lambda \left( \alpha \sum |\beta_j| + (1 - \alpha) \sum \beta_j^2 \right)
+$$
+* $α = 1$ → LASSO
+* $α = 0$ → Ridge
+* $0 < α < 1$ → mixture
+
+⸻
+
+Why elastic net is useful
+* When predictors are correlated:
+    * LASSO tends to pick one variable
+    * Elastic net tends to pick groups
+
+
+The L1 penalty used in LASSO shrinks coefficients and can set some exactly to zero, effectively performing variable selection. In contrast, the L2 penalty used in ridge regression shrinks coefficients toward zero but does not eliminate variables. Elastic net combines both penalties, allowing for variable selection while also handling correlated predictors more effectively.
+
+* LASSO (λ_min):
+    * More variables selected
+    * Higher false positives
+* LASSO (λ_1se):
+    * More conservative
+    * Fewer variables
+* Elastic Net:
+    * Better when ρ = 0.35 or 0.7
+    * More stable selection
+
+
+
+You’re thinking about this exactly the right way — consistency across tables matters a lot in a write-up.
+
+Also yes: **if you didn’t explicitly compute MSE, remove it**. Don’t include something you can’t clearly justify.
+
+---
+
+# **Main issues to fix**
+
+### 1. Inconsistency across tables
+
+* Table 2 = “true predictors only”
+* Table 3 = “null predictors only”
+* But metrics aren’t parallel
+
+### 2. MSE included but not computed 
+
+---
+
+# **Clean, consistent structure (recommended)**
+
+#### Table 1: Variable Selection Performance
+
+| n   | ρ    | Method              | Sensitivity (TPR) | Specificity | False Positive Rate | Mean Model Size |
+| --- | ---- | ------------------- | ----------------- | ----------- | ------------------- | --------------- |
+| 250 | 0.00 | Backward (p-value)  | ...               | ...         | ...                 | ...             |
+| 250 | 0.00 | AIC                 | ...               | ...         | ...                 | ...             |
+
+
+
+#### Table 2: Estimation (True Predictors Only)
+
+| n   | ρ    | Method             | Mean Bias | Coverage (95% CI) | Type II Error |
+| --- | ---- | ------------------ | --------- | ----------------- | ------------- |
+| 250 | 0.00 | Backward (p-value) | ...       | ...               | ...           |
+| 250 | 0.00 | AIC                | ...       | ...               | ...           |
+| ... | ...  | ...                | ...       | ...               | ...           |
+
+---
+
+#### Table 3: Estimation (Null Predictors Only)
+
+
+| n   | ρ    | Method             | Coverage (95% CI) | Type I Error |
+| --- | ---- | ------------------ | ----------------- | ------------ |
+| 250 | 0.00 | Backward (p-value) | ...               | ...          |
+| 250 | 0.00 | AIC                | ...               | ...          |
+| ... | ...  | ...                | ...               | ...          |
+
+---
+
+#  Why this is better
+
+Now you have:
+
+| Table   | Population             | Metrics               |
+| ------- | ---------------------- | --------------------- |
+| Table 1 | All variables          | Selection performance |
+| Table 2 | True variables (β ≠ 0) | Bias + inference      |
+| Table 3 | Null variables (β = 0) | Inference             |
+
+Very clean separation
+Easy to explain
+
+---
+
+#  Important note on FPR
+
+You already have **False Positive Rate in Table 1**, so:
+
+**Do NOT repeat it in Table 3**
+
+That was causing redundancy.
+
+---
+
+# Optional improvement (if you want to impress)
+
+Rename slightly:
+
+* Table 2 → **“Performance for True Predictors”**
+* Table 3 → **“Performance for Null Predictors”**
+
+More intuitive than “Estimation and Inference”
+
+---
+
+#  How to explain this structure
+
+> We summarize performance separately for true and null predictors to clearly distinguish between the ability to detect real effects and avoid false discoveries.
+
+---
+
+# Final takeaway
+
+✔ Remove MSE
+✔ Separate true vs null cleanly
+✔ Avoid duplicating FPR
+✔ Keep metrics aligned with what they apply to
+
+---
+
+If you want, I can:
+
+* Help you **match each table exactly to your code outputs**
+* Or suggest **which results to highlight in your presentation vs report**
+
