@@ -60,6 +60,24 @@ alpha_enet <- 0.5 # perhaps test multiple alphas??? c(0.25, 0.5, 0.75)
 cv_folds <- 10
 ```
 
+### Replication Justification
+```{r}
+# MCSE for binary performance measure
+mcse_bin <- function(p, nsim) {
+  sqrt(p * (1 - p) / nsim)
+  }
+
+mcse_bin(0.50, 10000)  # worst case
+mcse_bin(0.95, 10000)  # nominal coverage
+```
+
+> If the true probability were 0.50, the estimated proportion from the sim would
+vary by about ±0.005 due to Monte Carlo sampling error.
+>
+> For coverage probability near 95%, the sim estimate is expected to vary by
+about ±0.002.
+
+
 ## Helper Functions
 
 ```{r}
@@ -223,7 +241,7 @@ mcse_prop <- function(x) {
 
 ```
 
-## Run Single Replication
+## Run Single Replication Function
 
 ```{r}
 run_single_rep <- function(n, rho, sim_id) {
@@ -423,7 +441,10 @@ variable_results %>%
 ```
 
 
-## Summaries
+## Results
+
+
+### Method & Variable Summaries
 
 ```{r}
 # Method-level summary: selection accuracy and model size
@@ -496,32 +517,8 @@ variable_summary <- variable_results %>%
 
 ```
 
-## Plotting
 
-## TPR
-
-```{r}
-# TPR vs rho
-ggplot(method_summary, aes(x = rho, y = mean_sensitivity, color = method)) +
-  geom_line() +
-  geom_point() +
-  facet_wrap(~ n) +
-  scale_color_discrete(
-    name = NULL,
-    labels = c(
-      backward_AIC = "AIC",
-      backward_BIC = "BIC",
-      backward_pvalue = "p-value",
-      lasso_lambda_min = expression("LASSO (" * lambda[min] * ")"),
-      lasso_lambda_1se = expression("LASSO (" * lambda[1*se] * ")"),
-      elastic_net_lambda_min = expression("ElNet (" * lambda[min] * ")"),
-      elastic_net_lambda_1se = expression("ElNet (" * lambda[1*se] * ")"))) +
-  labs(y = "Sensitivity (TPR)", x = "Correlation (rho)") +
-  theme(
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "white"),
-    panel.spacing = unit(0.8, "lines"))
-```
+### Selection Performance
 
 
 ```{r}
@@ -538,10 +535,7 @@ plot_data <- method_summary %>%
       metric,
       mean_sensitivity = "TPR (Sensitivity)",
       mean_false_positive_rate = "FPR"))
-```
 
-
-```{r}
 # TPR and FPR together
 ggplot(plot_data,
        aes(x = rho, y = value, color = method)) +
@@ -615,10 +609,164 @@ cbp1 <- c("#999999", "#E69F00", "#56B4E9", "#009E73",
 ```
 
 
+```{r label = "Table used in final report (Table 1)"}
+
+selection_table_wide <- method_summary %>%
+  mutate(
+    Method = recode(
+      method,
+      backward_pvalue = "Backward (p-value)",
+      backward_AIC = "AIC",
+      backward_BIC = "BIC",
+      lasso_lambda_min = "LASSO (λₘᵢₙ)",
+      lasso_lambda_1se = "LASSO (λ₁ₛₑ)",
+      elastic_net_lambda_min = "ElNet (λₘᵢₙ)",
+      elastic_net_lambda_1se = "ElNet (λ₁ₛₑ)"),
+    rho_label = case_when(
+      rho == 0 ~ "rho0",
+      rho == 0.35 ~ "rho035",
+      rho == 0.7 ~ "rho07"
+    )) %>%
+  select(Method, rho_label, n, TPR = mean_sensitivity,
+         FPR = mean_false_positive_rate, Size = mean_model_size) %>%
+  pivot_wider(
+    names_from = c(rho_label, n),
+    values_from = c(TPR, FPR, Size),
+    names_glue = "{rho_label}_n{n}_{.value}") %>%
+  select(
+    Method,
+    rho0_n250_TPR, rho0_n250_FPR, rho0_n250_Size,
+    rho0_n500_TPR, rho0_n500_FPR, rho0_n500_Size,
+    rho035_n250_TPR, rho035_n250_FPR, rho035_n250_Size,
+    rho035_n500_TPR, rho035_n500_FPR, rho035_n500_Size,
+    rho07_n250_TPR, rho07_n250_FPR, rho07_n250_Size,
+    rho07_n500_TPR, rho07_n500_FPR, rho07_n500_Size)
+
+rho0_cols <- c(
+  "rho0_n250_TPR", "rho0_n250_FPR", "rho0_n250_Size",
+  "rho0_n500_TPR", "rho0_n500_FPR", "rho0_n500_Size")
+
+rho035_cols <- c(
+  "rho035_n250_TPR", "rho035_n250_FPR", "rho035_n250_Size",
+  "rho035_n500_TPR", "rho035_n500_FPR", "rho035_n500_Size")
+
+rho07_cols <- c(
+  "rho07_n250_TPR", "rho07_n250_FPR", "rho07_n250_Size",
+  "rho07_n500_TPR", "rho07_n500_FPR", "rho07_n500_Size")
+
+selection_table_wide %>%
+  gt(rowname_col = "Method") %>%
+  tab_header(
+    title = "Variable Selection Performance") %>%
+  
+  # add sample-size spanners FIRST
+  tab_spanner(label = "n = 250",id = "rho0_n250",
+      columns = c(rho0_n250_TPR, rho0_n250_FPR, rho0_n250_Size)) %>%
+  tab_spanner(label = "n = 500",id = "rho0_n500",
+      columns = c(rho0_n500_TPR, rho0_n500_FPR, rho0_n500_Size)) %>%
+  tab_spanner(label = "n = 250",id = "rho035_n250",
+      columns = c(rho035_n250_TPR, rho035_n250_FPR, rho035_n250_Size)) %>%
+  tab_spanner(label = "n = 500",id = "rho035_n500",
+      columns = c(rho035_n500_TPR, rho035_n500_FPR, rho035_n500_Size)) %>%
+  tab_spanner(label = "n = 250", id = "rho07_n250",
+      columns = c(rho07_n250_TPR, rho07_n250_FPR, rho07_n250_Size)) %>%
+  tab_spanner(
+    label = "n = 500",
+    id = "rho07_n500",
+    columns = c(rho07_n500_TPR, rho07_n500_FPR, rho07_n500_Size)) %>%
+  
+  # correlation spanners SECOND so they sit on top
+  tab_spanner(label = "ρ = 0",id = "rho0",
+              columns = all_of(rho0_cols)) %>%
+  tab_spanner(label = "ρ = 0.35",id = "rho035",
+              columns = all_of(rho035_cols)) %>%
+  tab_spanner(label = "ρ = 0.7",id = "rho07",
+              columns = all_of(rho07_cols)) %>%
+  cols_label(
+    .list = setNames(
+      rep(c("TPR", "FPR", "Size"), 6),
+      names(selection_table_wide)[-1]
+    )) %>%
+  fmt_number(columns = contains("TPR") | contains("FPR"),decimals = 2) %>%
+  fmt_number(columns = contains("Size"),decimals = 1) %>% 
+  tab_style(
+  style = cell_borders(
+    sides = "left",
+    color = "gray33",
+    weight = px(3)),
+  locations = cells_body(
+    columns = c(
+      rho0_n250_TPR,
+      rho0_n500_TPR,
+      rho035_n250_TPR,
+      rho035_n500_TPR,
+      rho07_n250_TPR,
+      rho07_n500_TPR
+      ))) 
+```
+
+For supplement section
+```{r}
+selection_heatmap_data <- variable_summary %>%
+  filter(beta_true != 0) %>%
+  mutate(
+    Method = recode(
+      method,
+      backward_pvalue = "Backward (p-value)",
+      backward_AIC = "AIC",
+      backward_BIC = "BIC",
+      lasso_lambda_min = "LASSO (min)",
+      lasso_lambda_1se = "LASSO (1se)",
+      elastic_net_lambda_min = "ElNet (min)",
+      elastic_net_lambda_1se = "ElNet (1se)"))
+
+ggplot(
+  selection_heatmap_data,
+  aes(
+    x = variable,
+    y = Method,
+    fill = selection_probability
+  )) +
+  geom_tile(color = "white") +
+  geom_text(
+    aes(
+      label = round(selection_probability, 3),
+      color = selection_probability < 0.75),
+    size = 5) +
+  facet_grid(n ~ rho) +
+  scale_fill_gradientn(
+    colours = c(
+      "#B2182B",
+      "#EF8A62",
+      "#FEE0D2",
+      "white",
+      "#D9F0D3",
+      "#1B7837" ),
+    values = scales::rescale(
+      c(0.20, 0.50, 0.75, 0.90, 0.97, 1.00),
+      from = c(0.20, 1.00)),
+    limits = c(0.20, 1.00),
+    name = "Selection\nProbability") +
+  scale_color_manual(
+    values = c(
+      "TRUE" = "white",
+      "FALSE" = "black"),
+    guide = "none") +
+  labs(
+    x = "True Predictor",
+    y = "Method",
+    title = "Selection Probability for True Predictors") +
+  theme_bw(base_size=13) +
+  theme(
+    strip.background = element_rect(fill = "white"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom")
+```
 
 
+### Estimation
 
-### BIAS
+#### Bias
 
 ```{r}
 # bias across simulations by method
@@ -665,9 +813,10 @@ ggplot(
   bias_heatmap_data,
   aes(x = variable, y = Method, fill = mean_bias)) +
   geom_tile(color = "white") +
-  geom_text(aes(label = round(mean_bias, 2)),size = 3) +
+  geom_text(aes(label = round(mean_bias, 2)),size = 5) +
   facet_grid(n ~ rho) +
   scale_fill_gradient2(
+    breaks = c(-0.09, 0, 0.02),
     low = "#4575B4",
     mid = "white",
     high = "#D73027",
@@ -677,7 +826,7 @@ ggplot(
     x = "True Predictor",
     y = "Method",
     title = "Mean Bias for True Predictors") +
-  theme_bw() +
+  theme_bw(base_size = 14) +
   theme(
     strip.background = element_rect(fill = "white"),
     axis.text.x = element_text(angle = 45, hjust = 1),
@@ -686,7 +835,7 @@ ggplot(
 
 
 
-### Type I
+#### Type I & II
 
 ```{r}
 # Type I error plotting
@@ -758,6 +907,7 @@ ggplot(variable_summary %>% filter(beta_true == 0),
 
 
 ```{r}
+# Type I boxplots
 ggplot(variable_summary %>% filter(beta_true == 0),
        aes(x = method, y = type1_error_rate, fill = method)) +
   geom_boxplot() +
@@ -776,72 +926,8 @@ ggplot(variable_summary %>% filter(beta_true == 0),
         legend.position = "none")
 ```
 
-```{r}
-ggplot(variable_summary %>% filter(beta_true == 0),
-       aes(x = variable, y = type1_error_rate)) +
-  geom_col() +
-  facet_grid(method ~ n + rho) +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-```
 
-
-### Coverage
-
-```{r}
-variable_summary %>%
-  filter(beta_true != 0) %>%
-  mutate(
-    Method = recode(
-      method,
-      backward_pvalue = "Backward p-value",
-      backward_AIC = "AIC",
-      backward_BIC = "BIC",
-      lasso_lambda_min = "LASSO (min)",
-      lasso_lambda_1se = "LASSO (1se)",
-      elastic_net_lambda_min = "ElNet (min)",
-      elastic_net_lambda_1se = "ElNet (1se)"),
-    scenario = paste0("n=", n, ", ρ=", rho)) %>% 
-
-ggplot(aes(x = variable, y = Method, fill = coverage)) +
-  geom_tile(color = "white") +
-  geom_text(aes(label = round(coverage, 3), color=coverage<0.8), size = 3)+
-  scale_color_manual(
-    values = c("TRUE" = "white","FALSE" = "black"),guide = "none")+
-  facet_grid(n ~ rho) +
-  # scale_fill_gradient2(
-  #   low = "#D73027",
-  #   midpoint = 0.95,
-  #   high = "#009E73",
-  #   name = "Coverage") +
-  scale_fill_gradientn(
-  colours = c(
-    "#67001F",  
-    "#B2182B",
-    "#F4A582",
-    "#FEEBE2",  
-    "white",
-    "#D9F0D3",
-    "#1B7837"),
-  values = scales::rescale(
-    c(0.20, 0.60, 0.85, 0.93, 0.95, 0.97, 1.00), #c(0.20, 0.50, 0.90, 0.95, 0.97, 1.00)
-    from = c(0.20, 1.00)),
-  limits = c(0.20, 1.00),
-  name = "Coverage") +
-  labs(
-    x = "True Predictor",
-    y = "Method",
-    title = "Coverage of 95% CIs for True Predictors") +
-  theme_bw() +
-  theme(
-    strip.background = element_rect(fill = "white"),
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    legend.position = "bottom")
-```
-
-
-
-## Tables
+**Tables:**
 
 ```{r}
 error_table <- variable_summary %>%
@@ -898,31 +984,6 @@ error_table_wide <- variable_summary %>%
   arrange(Correlation, Method)
 ```
 
-### Type II & II
-
-```{r}
-# sample size as spanners
-error_table_wide %>%
-  gt(rowname_col = "Method", groupname_col = "Correlation") %>%
-  fmt_markdown(columns = Method) %>% 
-  tab_header(title = "Type I & II Error Rates by Sample Size") %>%
-  tab_spanner(
-    label = "n = 250",
-    columns = c(type1_250, type2_250)) %>%
-  tab_spanner(
-    label = "n = 500",
-    columns = c(type1_500, type2_500)) %>%
-  cols_label(
-    type1_250 = "Type I",
-    type2_250 = "Type II",
-    type1_500 = "Type I",
-    type2_500 = "Type II") %>%
-  fmt_number(
-    columns = starts_with("type"),
-    decimals = 3)
-
-```
-
 
 ```{r}
 # Type I & II as spanners
@@ -951,7 +1012,160 @@ error_table_wide %>%
     decimals = 3)
 ```
 
-### Coverage
+```{r}
+error_table <- variable_summary %>%
+  group_by(n, rho, method) %>%
+  summarise(
+    type1 = mean(type1_error_rate[beta_true == 0], na.rm = TRUE),
+    type2 = mean(type2_error_rate[beta_true != 0], na.rm = TRUE),
+    .groups = "drop") %>%
+  mutate(
+    Method = recode(
+      method,
+      backward_pvalue = "Backward (p-value)",
+      backward_AIC = "AIC",
+      backward_BIC = "BIC",
+      lasso_lambda_min = "LASSO (λₘᵢₙ)",
+      lasso_lambda_1se = "LASSO (λ₁ₛₑ)",
+      elastic_net_lambda_min = "ElNet (λₘᵢₙ)",
+      elastic_net_lambda_1se = "ElNet (λ₁ₛₑ)"),
+    rho_label = case_when(
+      rho == 0 ~ "rho0",
+      rho == 0.35 ~ "rho035",
+      rho == 0.7 ~ "rho07"
+    )) %>%
+  select(Method, rho_label, n, type1, type2) %>%
+  pivot_wider(
+    names_from = c(rho_label, n),
+    values_from = c(type1, type2),
+    names_glue = "{rho_label}_n{n}_{.value}") %>%
+  select(
+    Method,
+    rho0_n250_type1, rho0_n250_type2,
+    rho0_n500_type1, rho0_n500_type2,
+    rho035_n250_type1, rho035_n250_type2,
+    rho035_n500_type1, rho035_n500_type2,
+    rho07_n250_type1, rho07_n250_type2,
+    rho07_n500_type1, rho07_n500_type2)
+
+
+error_table %>%
+  gt(rowname_col = "Method") %>%
+  tab_header(
+    title = "Type I and Type II Error Rates") %>%
+  
+  tab_spanner(label = "n = 250",id = "rho0_n250",
+    columns = c(rho0_n250_type1, rho0_n250_type2)) %>%
+  tab_spanner(label = "n = 500",id = "rho0_n500",
+    columns = c(rho0_n500_type1, rho0_n500_type2)) %>%
+  tab_spanner(label = "n = 250",id = "rho035_n250",
+    columns = c(rho035_n250_type1, rho035_n250_type2)) %>%
+  tab_spanner(label = "n = 500",id = "rho035_n500",
+    columns = c(rho035_n500_type1, rho035_n500_type2)) %>%
+  tab_spanner(label = "n = 250",id = "rho07_n250",
+    columns = c(rho07_n250_type1, rho07_n250_type2)) %>%
+  tab_spanner(label = "n = 500",id = "rho07_n500",
+    columns = c(rho07_n500_type1, rho07_n500_type2)) %>%
+
+  tab_spanner(label = "ρ = 0",id = "rho0",
+    columns = c(
+      rho0_n250_type1, rho0_n250_type2,
+      rho0_n500_type1, rho0_n500_type2
+    )) %>%
+  tab_spanner(label = "ρ = 0.35",id = "rho035",
+    columns = c(
+      rho035_n250_type1, rho035_n250_type2,
+      rho035_n500_type1, rho035_n500_type2
+    )) %>%
+  tab_spanner(label = "ρ = 0.7",id = "rho07",
+    columns = c(
+      rho07_n250_type1, rho07_n250_type2,
+      rho07_n500_type1, rho07_n500_type2
+    )) %>%
+  cols_label(
+    rho0_n250_type1 = "Type I",
+    rho0_n250_type2 = "Type II",
+    rho0_n500_type1 = "Type I",
+    rho0_n500_type2 = "Type II",
+    rho035_n250_type1 = "Type I",
+    rho035_n250_type2 = "Type II",
+    rho035_n500_type1 = "Type I",
+    rho035_n500_type2 = "Type II",
+    rho07_n250_type1 = "Type I",
+    rho07_n250_type2 = "Type II",
+    rho07_n500_type1 = "Type I",
+    rho07_n500_type2 = "Type II") %>%
+  fmt_number(columns = starts_with("rho"),decimals = 3) %>% 
+  tab_style(
+  style = cell_borders(
+    sides = "left",
+    color = "gray33",
+    weight = px(3)),
+  locations = cells_body(
+    columns = c(
+      rho0_n250_type1,
+      rho0_n500_type1,
+      rho035_n250_type1,
+      rho035_n500_type1,
+      rho07_n250_type1,
+      rho07_n500_type1
+      ))) 
+
+```
+
+
+#### Coverage
+
+```{r}
+variable_summary %>%
+  filter(beta_true != 0) %>%
+  mutate(
+    Method = recode(
+      method,
+      backward_pvalue = "Backward p-value",
+      backward_AIC = "AIC",
+      backward_BIC = "BIC",
+      lasso_lambda_min = "LASSO (min)",
+      lasso_lambda_1se = "LASSO (1se)",
+      elastic_net_lambda_min = "ElNet (min)",
+      elastic_net_lambda_1se = "ElNet (1se)"),
+    scenario = paste0("n=", n, ", ρ=", rho)) %>% 
+
+ggplot(aes(x = variable, y = Method, fill = coverage)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(coverage, 3), color=coverage<0.8), size = 5)+
+  scale_color_manual(
+    values = c("TRUE" = "white","FALSE" = "black"),guide = "none")+
+  facet_grid(n ~ rho) +
+  # scale_fill_gradient2(
+  #   low = "#D73027",
+  #   midpoint = 0.95,
+  #   high = "#009E73",
+  #   name = "Coverage") +
+  scale_fill_gradientn(
+  colours = c(
+    "#67001F",  
+    "#B2182B",
+    "#F4A582",
+    "#FEEBE2",  
+    "white",
+    "#D9F0D3",
+    "#1B7837"),
+  values = scales::rescale(
+    c(0.20, 0.60, 0.85, 0.93, 0.95, 0.97, 1.00), #c(0.20, 0.50, 0.90, 0.95, 0.97, 1.00)
+    from = c(0.20, 1.00)),
+  limits = c(0.20, 1.00),
+  name = "Coverage") +
+  labs(
+    x = "True Predictor",
+    y = "Method",
+    title = "Coverage of 95% CIs for True Predictors") +
+  theme_bw(base_size=14) +
+  theme(
+    strip.background = element_rect(fill = "white"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom")
+```
 
 ```{r}
 coverage_table <- 
@@ -1136,138 +1350,11 @@ variable_summary %>%
 
 
 
-```{r}
-ggplot(variable_summary %>% filter(beta_true != 0),
-       aes(x = variable,
-           y = coverage,
-           color = method)) +
-  geom_point(position = position_dodge(width = 0.5)) +
-  facet_grid(n ~ rho) +
-  geom_hline(yintercept = 0.95,
-             linetype = "dashed") +
-  scale_color_manual(
-    name = NULL,
-    values = c(
-      backward_AIC = "#E69F00",
-      backward_BIC = "#56B4E9",
-      backward_pvalue = "#009E73",
-      elastic_net_lambda_min = "#0072B2",
-      elastic_net_lambda_1se = "#CC79A7",
-      lasso_lambda_min = "#D55E00",
-      lasso_lambda_1se = "#999999"),
-    labels = c(
-      backward_AIC = "AIC",
-      backward_BIC = "BIC",
-      backward_pvalue = "p-value",
-      lasso_lambda_min = expression("LASSO (" * lambda[min] * ")"),
-      lasso_lambda_1se = expression("LASSO (" * lambda[1*se] * ")"),
-      elastic_net_lambda_min = expression("ElNet (" * lambda[min] * ")"),
-      elastic_net_lambda_1se = expression("ElNet (" * lambda[1*se] * ")"))) +
-  guides(color = guide_legend(nrow = 1)) +
-  theme_bw()+
-  theme(
-    legend.position = "bottom",
-    strip.background = element_rect(fill = "white"),
-    panel.spacing = unit(1, "lines"),
-    axis.text.x = element_text(angle = 45, hjust = 1))
-```
-
-
-
-```{r}
-# Type I & II as spanners
-error_table_wide %>%
-  gt(
-    rowname_col = "Method",
-    groupname_col = "Correlation") %>%
-  fmt_markdown(columns = Method) %>%
-  tab_header(
-    title = "Type I & II Error Rates") %>%
-  # First level: Error type
-  tab_spanner(
-    label = "Type I (Null)",
-    columns = c(type1_250, type1_500)) %>%
-  tab_spanner(
-    label = "Type II (True)",
-    columns = c(type2_250, type2_500)) %>%
-  # Column labels underneath
-  cols_label(
-    type1_250 = "n = 250",
-    type1_500 = "n = 500",
-    type2_250 = "n = 250",
-    type2_500 = "n = 500") %>%
-  fmt_number(
-    columns = starts_with("type"),
-    decimals = 3)
-```
-
-
-### Bias
-
-```{r}
-
-bias_table <- variable_summary %>%
-  # Only true predictors
-  filter(beta_true != 0) %>%
-  mutate(
-    Method = recode(
-      method,
-      backward_pvalue = "Backward (p-value)",
-      backward_AIC = "AIC",
-      backward_BIC = "BIC",
-      lasso_lambda_min = "LASSO (λₘᵢₙ)",
-      lasso_lambda_1se = "LASSO (λ₁ₛₑ)",
-      elastic_net_lambda_min = "ElNet (λₘᵢₙ)",
-      elastic_net_lambda_1se = "ElNet (λ₁ₛₑ)"),
-    Correlation = case_when(
-      rho == 0 ~ "ρ = 0 (Independent)",
-      rho == 0.35 ~ "ρ = 0.35 (Moderate)",
-      rho == 0.7 ~ "ρ = 0.7 (Strong)"
-    )) %>%
-  select(Correlation, Method, n, variable, mean_bias) %>%
-  pivot_wider(
-    names_from = c(n, variable),
-    values_from = mean_bias,
-    names_glue = "n{n}_{variable}") %>%
-  arrange(Correlation, Method)
-
-bias_table %>%
-  gt(rowname_col = "Method",groupname_col = "Correlation") %>%
-  tab_header(title = "Mean Bias for True Predictors") %>%
-  tab_spanner(
-    label = "n = 250",
-    columns = c(n250_V01, n250_V02, n250_V03,
-                n250_V04, n250_V05)) %>%
-  tab_spanner(
-    label = "n = 500",
-    columns = c(n500_V01, n500_V02, n500_V03,
-                n500_V04, n500_V05)) %>%
-  cols_label(
-    n250_V01 = "V01",n250_V02 = "V02",n250_V03 = "V03",n250_V04 = "V04",
-    n250_V05 = "V05",
-    n500_V01 = "V01",n500_V02 = "V02",n500_V03 = "V03",n500_V04 = "V04",
-    n500_V05 = "V05") %>%
-  fmt_number(columns = starts_with("n"),decimals = 3) %>%
-  # visual divider between sample sizes
-  tab_style(
-    style = cell_borders(
-      sides = "left",
-      color = "gray33",
-      weight = px(3)),
-    locations = cells_body(columns = n500_V01)) 
-  
-
-```
-
-
-
 ## RAM
 ```{r}
 data.frame(
-  object = ls(),
-  size_MB = round(
-    sapply(
-      ls(), function(x) object.size(get(x)) / 1024^2), 1)) %>% 
+  size_MB = round(sapply(
+    ls(), function(x) object.size(get(x)) / 1024^2), 1)) %>% 
   arrange(desc(size_MB))
 ```
 
