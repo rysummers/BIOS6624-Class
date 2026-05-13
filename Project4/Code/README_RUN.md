@@ -115,6 +115,8 @@ or from a terminal:
 Rscript -e "rmarkdown::render('Code/Project4_Sim.Rmd')"
 ```
 
+or by simply running the .RMD within Rstudio
+
 ---
 
 # Notes
